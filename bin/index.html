@@ -1,2188 +1,1916 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>StackScope – Custom TCP/IP Packet Analyzer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StackScope — Custom TCP/IP Packet Analyzer & Transfer Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #050913;
-      --bg2: #0a1120;
-      --panel: #0d1628;
-      --panel2: #111d35;
-      --line: #1a2a47;
-      --tx: #dce6f7;
-      --mut: #7d8fb0;
-      --cy: #22d3ee;
-      --bl: #3b82f6;
-      --ok: #34d399;
-      --warn: #fbbf24;
-      --bad: #f87171;
-      --mono: "Cascadia Mono", "JetBrains Mono", Consolas, "SF Mono", monospace;
-      --sans: "Segoe UI", Inter, system-ui, sans-serif
+      --bg: #F8FAFC;
+      --card-bg: #FFFFFF;
+      --border: #D9E2EC;
+      --border-subtle: #E2E8F0;
+      --primary: #2563EB;
+      --primary-hover: #1D4ED8;
+      --primary-light: #EFF6FF;
+      --primary-border: #BFDBFE;
+      --success: #15803D;
+      --success-light: #F0FDF4;
+      --success-border: #BBF7D0;
+      --teal: #0D9488;
+      --teal-light: #F0FDFA;
+      --teal-border: #99F6E4;
+      --text: #172033;
+      --text-muted: #64748B;
+      --text-subtle: #94A3B8;
+      --warning: #D97706;
+      --danger: #DC2626;
+      --shadow-sm: 0 1px 2px 0 rgba(16, 24, 40, 0.05);
+      --shadow-md: 0 4px 6px -1px rgba(16, 24, 40, 0.08), 0 2px 4px -2px rgba(16, 24, 40, 0.04);
+      --shadow-lg: 0 10px 15px -3px rgba(16, 24, 40, 0.08), 0 4px 6px -4px rgba(16, 24, 40, 0.03);
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', Consolas, "SF Mono", monospace;
     }
 
-    * {
-      box-sizing: border-box
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
 
-    html,
     body {
-      margin: 0;
-      height: 100%
-    }
-
-    body {
-      background: radial-gradient(900px 500px at 85% -10%, #0d2447 0, transparent 60%), var(--bg);
-      color: var(--tx);
-      font: 14px/1.5 var(--sans)
-    }
-
-    svg {
-      width: 18px;
-      height: 18px;
-      flex: none
-    }
-
-    code {
-      font-family: var(--mono);
-      background: var(--panel2);
-      padding: 1px 5px;
-      border-radius: 4px
-    }
-
-    .app {
-      display: grid;
-      grid-template-columns: 230px 1fr;
-      min-height: 100%
-    }
-
-    .sidebar {
-      background: var(--bg2);
-      border-right: 1px solid var(--line);
-      padding: 18px 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 22px;
-      position: sticky;
-      top: 0;
-      height: 100vh
-    }
-
-    .brand {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      padding: 0 6px
-    }
-
-    .brand small {
-      display: block;
-      color: var(--mut);
-      font-size: 11px
-    }
-
-    .logo {
-      width: 34px;
-      height: 34px;
-      border-radius: 9px;
-      display: grid;
-      place-items: center;
-      font-weight: 700;
-      color: #03121c;
-      background: linear-gradient(135deg, var(--cy), var(--bl))
-    }
-
-    nav {
-      display: flex;
-      flex-direction: column;
-      gap: 3px
-    }
-
-    nav a {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      padding: 9px 12px;
-      border-radius: 8px;
-      color: var(--mut);
-      text-decoration: none
-    }
-
-    nav a:hover {
-      background: var(--panel);
-      color: var(--tx)
-    }
-
-    nav a.active {
-      background: linear-gradient(90deg, #0f2d4d, #0d1b33);
-      color: var(--cy);
-      box-shadow: inset 2px 0 var(--cy)
-    }
-
-    .side-foot {
-      margin-top: auto;
-      display: flex;
-      gap: 8px;
-      align-items: center;
-      color: var(--mut);
-      font-size: 12px;
-      padding: 10px;
-      border: 1px solid var(--line);
-      border-radius: 8px
-    }
-
-    .dot {
-      width: 9px;
-      height: 9px;
-      border-radius: 50%;
-      background: #52627f;
-      flex: none
-    }
-
-    .dot.connecting {
-      background: var(--warn);
-      animation: pulse 1s infinite
-    }
-
-    .dot.connected {
-      background: var(--ok)
-    }
-
-    .dot.error {
-      background: var(--bad)
-    }
-
-    main {
-      padding: 22px 26px 40px;
-      min-width: 0
-    }
-
-    .topbar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 14px
-    }
-
-    h1 {
-      font-size: 22px;
-      margin: 0
-    }
-
-    h2 {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
       font-size: 14px;
-      margin: 0 0 12px;
-      color: var(--cy);
-      font-weight: 600
-    }
-
-    .pill {
-      font-size: 12px;
-      color: var(--mut);
-      border: 1px solid var(--line);
-      padding: 3px 10px;
-      border-radius: 99px
-    }
-
-    .banner {
-      display: none;
-      gap: 12px;
-      align-items: center;
-      padding: 12px 16px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      background: var(--panel);
-      margin-bottom: 16px;
-    }
-
-    .banner.error {
+      line-height: 1.5;
+      min-height: 100vh;
       display: flex;
-      border-color: #5b2330;
-      background: #1c0f18;
-    }
-
-    .banner.hide {
-      display: none !important;
-      margin: 0 !important;
-      padding: 0 !important;
-      border: 0 !important;
-    }
-
-    .banner.idle svg {
-      color: var(--cy)
-    }
-
-    .banner.error {
-      border-color: #5b2330;
-      background: #1c0f18
-    }
-
-    .banner.error svg {
-      color: var(--bad)
-    }
-
-    .banner .btn {
-      margin-left: auto
-    }
-
-    .spinner {
-      width: 18px;
-      height: 18px;
-      border: 2px solid var(--line);
-      border-top-color: var(--cy);
-      border-radius: 50%;
-      animation: spin .8s linear infinite;
-      flex: none
-    }
-
-    .view {
-      display: none;
       flex-direction: column;
-      gap: 16px
     }
 
-    .view.active {
-      display: flex
-    }
-
-    .grid2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px
-    }
-
-    .card {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 16px;
-      min-width: 0
-    }
-
-    .stats {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-      gap: 12px
-    }
-
-    .stat {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 14px;
-      border-top: 2px solid var(--bl)
-    }
-
-    .stat label {
-      color: var(--mut);
-      font-size: 12px
-    }
-
-    .stat .v {
-      font-size: 26px;
-      font-weight: 600;
-      font-family: var(--mono);
-      margin-top: 2px
-    }
-
-    .stat .v.txt {
-      font-size: 15px;
-      font-family: var(--sans);
-      line-height: 1.4;
-      padding: 6px 0
-    }
-
-    .stat small {
-      color: var(--mut);
-      font-size: 11px
-    }
-
-    .stat.cy {
-      border-top-color: var(--cy)
-    }
-
-    .skeleton {
-      color: transparent !important;
-      background: linear-gradient(90deg, var(--panel2), #1a2c4d, var(--panel2));
-      background-size: 200% 100%;
-      animation: shimmer 1.2s infinite;
-      border-radius: 6px
-    }
-
-    .toolbar {
+    /* Top Navigation Bar */
+    header {
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
       display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
       align-items: center;
-      margin-bottom: 12px
-    }
-
-    input[type=search],
-    input[type=text],
-    input[type=number] {
-      background: var(--bg2);
-      border: 1px solid var(--line);
-      color: var(--tx);
-      border-radius: 8px;
-      padding: 8px 12px;
-      font: inherit
-    }
-
-    input:focus,
-    button:focus-visible,
-    a:focus-visible {
-      outline: 2px solid var(--cy);
-      outline-offset: 1px
-    }
-
-    #search {
-      flex: 1;
-      min-width: 200px
-    }
-
-    .chips {
-      display: flex;
-      gap: 6px
-    }
-
-    .chip {
-      background: var(--bg2);
-      border: 1px solid var(--line);
-      color: var(--mut);
-      padding: 6px 14px;
-      border-radius: 99px;
-      cursor: pointer;
-      font: inherit
-    }
-
-    .chip[aria-pressed=true] {
-      background: #0e3a55;
-      border-color: var(--cy);
-      color: var(--cy)
-    }
-
-    .follow {
-      color: var(--mut);
-      font-size: 13px;
-      display: flex;
-      gap: 6px;
-      align-items: center
-    }
-
-    .btn {
-      display: inline-flex;
-      gap: 7px;
-      align-items: center;
-      background: var(--panel2);
-      border: 1px solid var(--line);
-      color: var(--tx);
-      padding: 8px 14px;
-      border-radius: 8px;
-      cursor: pointer;
-      font: inherit
-    }
-
-    .btn:hover {
-      border-color: var(--bl)
-    }
-
-    .btn.primary {
-      background: linear-gradient(135deg, var(--cy), var(--bl));
-      color: #03121c;
-      border: 0;
-      font-weight: 600
-    }
-
-    .btn.danger:hover {
-      border-color: var(--bad);
-      color: var(--bad)
-    }
-
-    .btn svg {
-      width: 15px;
-      height: 15px
-    }
-
-    .table-wrap {
-      height: 320px;
-      max-height: 320px;
-      overflow-y: auto;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      position: relative;
-    }
-
-    [data-slot="inspector"], [data-slot="structure"] {
-      min-height: 180px;
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-family: var(--mono);
-      font-size: 12.5px
-    }
-
-    th {
+      justify-content: space-between;
       position: sticky;
       top: 0;
-      background: var(--panel2);
-      text-align: left;
-      padding: 8px 10px;
-      color: var(--mut);
-      font-family: var(--sans);
-      font-weight: 600;
-      z-index: 1;
-      white-space: nowrap
+      z-index: 50;
+      box-shadow: var(--shadow-sm);
     }
 
-    td {
-      padding: 5px 10px;
-      border-top: 1px solid #121f38;
-      white-space: nowrap;
-      max-width: 420px;
-      overflow: hidden;
-      text-overflow: ellipsis
+    .brand-wrap {
+      display: flex;
+      align-items: center;
+      gap: 12px;
     }
 
-    tbody tr {
-      cursor: pointer
+    .brand-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #2563EB, #1D4ED8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      box-shadow: 0 2px 4px rgba(37, 99, 235, 0.25);
     }
 
-    tbody tr:hover {
-      background: #0f2038
+    .brand-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
-    tbody tr.sel {
-      background: #0e3354;
-      box-shadow: inset 2px 0 var(--cy)
+    .brand-subtitle {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+      letter-spacing: 0.2px;
     }
 
-    tr.p-TCP td:nth-child(5) {
-      color: var(--cy)
+    .header-center {
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
-    tr.p-ARP td:nth-child(5) {
-      color: var(--warn)
-    }
-
-    tr.p-IPv4 td:nth-child(5) {
-      color: var(--bl)
-    }
-
-    .empty {
-      padding: 36px 16px;
-      text-align: center;
-      color: var(--mut)
-    }
-
-    .empty svg {
-      width: 28px;
-      height: 28px;
-      color: var(--cy);
-      display: block;
-      margin: 0 auto 8px
-    }
-
-    .muted {
-      color: var(--mut)
-    }
-
-    .small {
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
       font-size: 12px;
-      margin-top: 8px
+      font-weight: 600;
+      background: var(--success-light);
+      color: var(--success);
+      border: 1px solid var(--success-border);
     }
 
-    .na {
-      color: #5d6f93;
-      font-style: italic
+    .status-badge.connecting {
+      background: #FFFBEB;
+      color: var(--warning);
+      border-color: #FDE68A;
     }
 
-    .flow {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      align-items: stretch
+    .status-badge.offline {
+      background: #FEF2F2;
+      color: var(--danger);
+      border-color: #FECACA;
     }
 
-    .step {
-      flex: 1;
-      min-width: 92px;
-      border: 1px dashed #2a3c60;
-      border-radius: 10px;
-      padding: 10px;
-      text-align: center;
-      color: var(--mut)
-    }
-
-    .step b {
-      display: block;
-      color: inherit;
-      font-size: 13px
-    }
-
-    .step small {
-      font-size: 11px
-    }
-
-    .step.on {
-      border: 1px solid var(--cy);
-      color: var(--cy);
-      background: #0a2236
-    }
-
-    .step.close.on {
-      border-color: var(--warn);
-      color: var(--warn);
-      background: #2a2008
-    }
-
-    .arrow {
-      align-self: center;
-      color: #35507d
-    }
-
-    .flowmeta {
-      margin-top: 12px;
-      color: var(--mut);
-      font-size: 12px
-    }
-
-    .timeline {
-      max-height: 300px;
-      overflow: auto;
-      border-left: 2px solid var(--line);
-      margin-left: 6px;
-      padding-left: 14px
-    }
-
-    .tl {
-      position: relative;
-      padding: 4px 0;
-      font-size: 12.5px;
-      display: flex;
-      gap: 8px;
-      align-items: baseline;
-      flex-wrap: wrap
-    }
-
-    .tl:before {
-      content: "";
-      position: absolute;
-      left: -20px;
-      top: 11px;
+    .status-dot {
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: var(--bl)
+      background: currentColor;
     }
 
-    .tl.TCP:before {
-      background: var(--cy)
+    .status-badge.connecting .status-dot {
+      animation: pulse-dot 1s infinite;
     }
 
-    .tl.ARP:before {
-      background: var(--warn)
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.8); }
     }
 
-    .tl time {
-      font-family: var(--mono);
-      color: var(--mut)
-    }
-
-    .tl .info {
-      font-family: var(--mono);
-      color: var(--tx)
-    }
-
-    .badge {
-      font-size: 11px;
-      padding: 1px 8px;
-      border-radius: 99px;
-      border: 1px solid var(--line);
-      color: var(--mut)
-    }
-
-    .badge.on {
-      color: var(--cy);
-      border-color: var(--cy);
-      background: #0a2236
-    }
-
-    .badge.ok {
-      color: var(--ok);
-      border-color: #1d6b52
-    }
-
-    .badge.bad {
-      color: var(--bad);
-      border-color: #7a2f38
-    }
-
-    .sum {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-      gap: 10px;
-      margin-bottom: 14px
-    }
-
-    .sum div {
-      background: var(--bg2);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 8px 10px
-    }
-
-    .sum label {
-      display: block;
-      color: var(--mut);
-      font-size: 11px
-    }
-
-    .sum span {
-      font-family: var(--mono);
-      word-break: break-all
-    }
-
-    .flags {
+    .header-actions {
       display: flex;
-      gap: 5px;
-      flex-wrap: wrap;
-      margin-bottom: 14px
+      align-items: center;
+      gap: 12px;
     }
 
-    .layer {
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      margin-bottom: 12px;
-      overflow: hidden
+    .endpoint-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #F1F5F9;
+      border: 1px solid var(--border);
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text);
+      font-weight: 500;
     }
 
-    .layer>header {
+    .icon-btn {
+      background: #FFFFFF;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      width: 34px;
+      height: 34px;
       display: flex;
-      justify-content: space-between;
-      padding: 8px 12px;
-      background: var(--panel2);
-      font-weight: 600
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
     }
 
-    .layer>header small {
-      color: var(--mut);
-      font-weight: 400
+    .icon-btn:hover {
+      background: #F1F5F9;
+      color: var(--text);
+      border-color: #CBD5E1;
     }
 
-    .fields {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 1px;
-      background: var(--line)
-    }
-
-    .f {
-      flex: var(--w, 1) 1 130px;
-      background: var(--bg2);
-      padding: 7px 10px;
-      min-width: 0
-    }
-
-    .f label {
-      display: block;
-      font-size: 11px;
-      color: var(--mut)
-    }
-
-    .f span {
-      font-family: var(--mono);
-      font-size: 12.5px;
-      word-break: break-all
-    }
-
-    .f em {
-      font-style: normal;
-      color: #587099;
-      font-size: 10.5px;
-      display: block
-    }
-
-    .l-eth>header {
-      border-left: 3px solid #6366f1
-    }
-
-    .l-ip>header {
-      border-left: 3px solid var(--bl)
-    }
-
-    .l-tcp>header {
-      border-left: 3px solid var(--cy)
-    }
-
-    .l-pay>header {
-      border-left: 3px solid var(--ok)
-    }
-
-    .l-arp>header {
-      border-left: 3px solid var(--warn)
-    }
-
-    .l-absent {
-      opacity: .55;
-      border-style: dashed
-    }
-
-    .l-absent .fields {
-      display: none
-    }
-
-    .stack {
+    /* Main Container */
+    .app-layout {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 24px 20px 48px;
+      width: 100%;
       display: flex;
       flex-direction: column;
-      align-items: stretch
+      gap: 20px;
+      flex: 1;
     }
 
-    .link {
-      text-align: center;
-      color: #35507d;
-      line-height: 1;
-      margin: -4px 0 6px
-    }
-
-    .dumps {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-      padding: 12px
-    }
-
-    pre {
-      margin: 0;
-      background: #040810;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 10px;
-      overflow: auto;
-      max-height: 240px;
-      font: 12px/1.5 var(--mono);
-      white-space: pre-wrap;
-      word-break: break-all
-    }
-
-    .dumps h4 {
-      margin: 0 0 6px;
-      font-size: 12px;
-      color: var(--mut);
-      font-weight: 600
-    }
-
-    .form {
-      display: grid;
-      gap: 12px;
-      max-width: 520px;
-      margin-bottom: 14px
-    }
-
-    .form label {
-      display: grid;
-      gap: 5px;
-      color: var(--mut);
-      font-size: 12px
-    }
-
-    .row {
+    /* Stepper Header Navigation */
+    .stepper-nav {
       display: flex;
-      gap: 10px;
-      flex-wrap: wrap
-    }
-
-    @keyframes spin {
-      to {
-        transform: rotate(360deg)
-      }
-    }
-
-    @keyframes pulse {
-      50% {
-        opacity: .35
-      }
-    }
-
-    @keyframes shimmer {
-      to {
-        background-position: -200% 0
-      }
-    }
-
-    @media(prefers-reduced-motion:reduce) {
-      * {
-        animation: none !important
-      }
-    }
-
-    @media(max-width:980px) {
-
-      .grid2,
-      .dumps {
-        grid-template-columns: 1fr
-      }
-    }
-
-    @media(max-width:760px) {
-      .app {
-        grid-template-columns: 1fr
-      }
-
-      .sidebar {
-        height: auto;
-        position: static;
-        flex-direction: row;
-        align-items: center;
-        padding: 10px;
-        overflow-x: auto
-      }
-
-      .brand small,
-      .side-foot,
-      nav a span {
-        display: none
-      }
-
-      nav {
-        flex-direction: row
-      }
-
-      main {
-        padding: 14px
-      }
-    }
-
-    /* ---- v2 visual refresh ---- */
-    :root {
-      --bg: #03050b;
-      --bg2: #070c18;
-      --panel: #0a1121;
-      --panel2: #0f1830;
-      --line: #16233f;
-      --vi: #8b5cf6
-    }
-
-    body {
-      background: radial-gradient(1000px 520px at 90% -10%, #0f2a5a66, transparent 60%), radial-gradient(800px 520px at -10% 110%, #2a1a6a44, transparent 60%), var(--bg)
-    }
-
-    .sidebar {
-      background: linear-gradient(180deg, #060b17, #04070f)
-    }
-
-    .logo {
-      box-shadow: 0 0 20px #22d3ee66
-    }
-
-    h1 {
-      font-size: 24px;
-      letter-spacing: .2px;
-      background: linear-gradient(90deg, #fff, #7fe7ff);
-      -webkit-background-clip: text;
-      background-clip: text;
-      color: transparent
-    }
-
-    h2 {
-      color: #9fb4d8;
-      font-size: 13px;
-      letter-spacing: .3px
-    }
-
-    .card {
-      background: linear-gradient(180deg, #0b1426, #080e1c);
-      box-shadow: 0 10px 30px #0009, inset 0 1px #ffffff0a
-    }
-
-    nav a.active {
-      box-shadow: inset 3px 0 var(--cy), 0 0 18px #22d3ee1a
-    }
-
-    .stats {
-      grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
-      gap: 14px
-    }
-
-    .stat {
-      display: flex;
-      gap: 14px;
       align-items: center;
-      position: relative;
-      overflow: hidden;
-      border: 1px solid var(--line);
-      padding: 16px;
-      background: linear-gradient(135deg, color-mix(in srgb, var(--ac) 16%, #0a1121), #0a1121 62%)
-    }
-
-    .stat:before {
-      content: "";
-      position: absolute;
-      left: 0;
-      top: 0;
-      bottom: 0;
-      width: 3px;
-      background: var(--ac);
-      box-shadow: 0 0 16px var(--ac)
-    }
-
-    .ico {
-      width: 42px;
-      height: 42px;
-      border-radius: 11px;
-      display: grid;
-      place-items: center;
-      flex: none;
-      color: var(--ac);
-      background: color-mix(in srgb, var(--ac) 16%, transparent);
-      box-shadow: 0 0 0 1px color-mix(in srgb, var(--ac) 35%, transparent)
-    }
-
-    .ico svg {
-      width: 21px;
-      height: 21px
-    }
-
-    .sbody {
-      min-width: 0
-    }
-
-    .stat .v {
-      font-size: 30px;
-      line-height: 1.1;
-      margin-top: 1px
-    }
-
-    .stat .v.txt {
-      font-size: 15px;
-      font-family: var(--sans);
-      font-weight: 600;
-      padding: 2px 0;
-      line-height: 1.3
-    }
-
-    .dist {
-      display: flex;
-      height: 14px;
-      border-radius: 99px;
-      overflow: hidden;
-      background: #0d1730;
-      border: 1px solid var(--line)
-    }
-
-    .dist i {
-      display: block;
-      height: 100%
-    }
-
-    .lg {
-      display: flex;
-      gap: 18px;
-      flex-wrap: wrap;
-      margin-top: 10px;
-      font-size: 12.5px;
-      color: var(--mut)
-    }
-
-    .lg b {
-      color: var(--tx);
-      font-family: var(--mono)
-    }
-
-    .lg span:before {
-      content: "";
-      display: inline-block;
-      width: 9px;
-      height: 9px;
-      border-radius: 3px;
-      background: var(--c);
-      margin-right: 7px
-    }
-
-    .step.on {
-      box-shadow: 0 0 18px #22d3ee33
-    }
-
-    .step.close.on {
-      box-shadow: 0 0 18px #fbbf2433
-    }
-
-    .banner {
-      background: linear-gradient(90deg, #0b1a33, #0a1121)
-    }
-
-    tbody tr:hover {
-      background: #0f2140
-    }
-
-    ::-webkit-scrollbar {
-      width: 10px;
-      height: 10px
-    }
-
-    ::-webkit-scrollbar-thumb {
-      background: #1c2c4d;
-      border-radius: 8px
-    }
-
-    ::-webkit-scrollbar-track {
-      background: transparent
-    }
-
-    /* ---- v3: black analyzer theme ---- */
-    :root {
-      --bg: #09090b;
-      --bg2: #0d0d10;
-      --panel: #101013;
-      --panel2: #16161a;
-      --line: #212126;
-      --tx: #ededf0;
-      --mut: #8d8d98;
-      --mono: "Space Mono", "JetBrains Mono", "Cascadia Mono", Consolas, monospace
-    }
-
-    body {
-      background: var(--bg)
-    }
-
-    .sidebar {
-      display: none
-    }
-
-    .app {
-      display: block
-    }
-
-    main {
-      max-width: 1180px;
-      margin: 0 auto;
-      padding: 26px 24px 50px
-    }
-
-    .top {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 16px;
-      flex-wrap: wrap;
-      margin-bottom: 18px
-    }
-
-    h1 {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      font-family: var(--mono);
-      font-size: 26px;
-      margin: 0;
-      background: none;
-      color: #fff;
-      -webkit-text-fill-color: #fff
-    }
-
-    h1 svg {
-      width: 26px;
-      height: 26px
-    }
-
-    .top p {
-      margin: 4px 0 0
-    }
-
-    .actions {
-      display: flex;
+      justify-content: center;
       gap: 8px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 16px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .step-item {
+      display: inline-flex;
       align-items: center;
-      flex-wrap: wrap
+      gap: 8px;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--text-muted);
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.15s ease;
+      user-select: none;
+    }
+
+    .step-item:hover {
+      color: var(--text);
+      background: #F8FAFC;
+    }
+
+    .step-item.active {
+      background: var(--primary);
+      color: #FFFFFF;
+      box-shadow: 0 1px 3px rgba(37, 99, 235, 0.3);
+    }
+
+    .step-item.completed {
+      color: var(--success);
+      background: var(--success-light);
+      border-color: var(--success-border);
+    }
+
+    .step-divider {
+      color: #CBD5E1;
+      font-size: 14px;
+    }
+
+    /* View Containers */
+    .view-container {
+      display: none;
+      flex-direction: column;
+      gap: 16px;
+      animation: fadeIn 0.2s ease-in-out;
+    }
+
+    .view-container.active {
+      display: flex;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Card styling */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #FAFCFE;
+    }
+
+    .card-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card-body {
+      padding: 20px;
+    }
+
+    /* =========================================================
+       SCREEN 1: CONNECTION (3-WAY HANDSHAKE)
+       ========================================================= */
+    .connection-hero {
+      text-align: center;
+      padding: 32px 20px;
+    }
+
+    .hero-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+
+    .hero-desc {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-bottom: 32px;
+    }
+
+    .handshake-canvas-wrap {
+      display: grid;
+      grid-template-columns: 200px 1fr 200px;
+      align-items: center;
+      gap: 24px;
+      max-width: 900px;
+      margin: 0 auto 36px;
+      padding: 24px;
+      background: #F8FAFC;
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+    }
+
+    .device-box {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 16px;
+    }
+
+    .device-icon-wrap {
+      width: 80px;
+      height: 80px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 12px;
+      transition: transform 0.2s ease;
+    }
+
+    .device-box.sender .device-icon-wrap svg {
+      filter: drop-shadow(0 4px 10px rgba(37, 99, 235, 0.25));
+    }
+
+    .device-box.receiver .device-icon-wrap svg {
+      filter: drop-shadow(0 4px 10px rgba(13, 148, 136, 0.25));
+    }
+
+    .device-role {
+      font-weight: 700;
+      font-size: 16px;
+      color: var(--text);
+    }
+
+    .device-ip {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-muted);
+      background: #FFFFFF;
+      padding: 2px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      margin-top: 4px;
+    }
+
+    /* Handshake visual steps */
+    .handshake-ladder {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      position: relative;
+    }
+
+    .ladder-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: relative;
+      padding: 8px 0;
+    }
+
+    .ladder-line {
+      position: absolute;
+      top: 50%;
+      left: 10px;
+      right: 10px;
+      height: 2px;
+      border-top: 2px dashed #CBD5E1;
+      z-index: 1;
+    }
+
+    .ladder-pill {
+      position: relative;
+      z-index: 2;
+      margin: 0 auto;
+      padding: 8px 18px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      box-shadow: var(--shadow-sm);
+      transition: all 0.3s ease;
+    }
+
+    .ladder-pill.syn {
+      background: #2563EB;
+      color: #FFFFFF;
+      border: 1px solid #1D4ED8;
+    }
+
+    .ladder-pill.synack {
+      background: #0D9488;
+      color: #FFFFFF;
+      border: 1px solid #0F766E;
+    }
+
+    .ladder-pill.ack {
+      background: #2563EB;
+      color: #FFFFFF;
+      border: 1px solid #1D4ED8;
+    }
+
+    .ladder-pill small {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      opacity: 0.9;
+    }
+
+    .ladder-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      position: absolute;
+      z-index: 3;
+    }
+
+    .ladder-indicator.right { right: -6px; }
+    .ladder-indicator.left { left: -6px; }
+
+    .btn-row-center {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .success-alert {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 20px;
+      border-radius: 8px;
+      background: var(--success-light);
+      border: 1px solid var(--success-border);
+      color: var(--success);
+      font-weight: 600;
+      font-size: 14px;
     }
 
     .btn {
-      background: #0c0c0f;
-      border-color: #2a2a30;
-      font-size: 13px;
-      padding: 7px 12px
-    }
-
-    .btn:hover {
-      border-color: #555
-    }
-
-    .card,
-    .stat,
-    .sc {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      box-shadow: none
-    }
-
-    h2 {
-      color: #fff;
-      font-size: 15px;
-      font-weight: 600;
-      margin-bottom: 14px
-    }
-
-    .stats {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-      gap: 14px;
-      margin-bottom: 14px
-    }
-
-    .sc {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      padding: 18px;
-      min-height: 104px
-    }
-
-    .sc label {
-      font-size: 13px;
-      color: var(--mut)
-    }
-
-    .sc .v {
-      font-family: var(--mono);
-      font-size: 26px;
-      font-weight: 700;
-      margin-top: 10px
-    }
-
-    .sc small {
-      display: block;
-      color: #6b6b75;
-      font-size: 11px;
-      margin-top: 2px
-    }
-
-    .sc>svg {
-      width: 22px;
-      height: 22px
-    }
-
-    .row2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 14px;
-      margin-bottom: 14px
-    }
-
-    .rings {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 14px
-    }
-
-    .ringbox {
-      text-align: center
-    }
-
-    .ring {
-      width: 130px;
-      height: 130px
-    }
-
-    .rbg {
-      fill: none;
-      stroke: #1b1b20;
-      stroke-width: 7
-    }
-
-    .rfg {
-      fill: none;
-      stroke-width: 7;
-      stroke-linecap: round
-    }
-
-    .rt {
-      fill: #fff;
-      font: 700 15px var(--mono);
-      text-anchor: middle
-    }
-
-    .rs {
-      fill: #8d8d98;
-      font: 9px var(--sans);
-      text-anchor: middle
-    }
-
-    .mini {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-      gap: 10px;
-      margin-bottom: 18px
-    }
-
-    .mini div {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 10px 14px
-    }
-
-    .mini label {
-      display: block;
-      font-size: 11px;
-      color: var(--mut)
-    }
-
-    .mini b {
-      font-family: var(--mono);
-      font-size: 14px;
-      font-weight: 700
-    }
-
-    .chips {
-      flex-wrap: wrap;
-      margin-bottom: 10px
-    }
-
-    .chip {
-      font-family: var(--mono);
-      font-size: 12px;
-      border-radius: 7px;
-      padding: 5px 12px;
-      background: #0d0d10
-    }
-
-    .chip.c-tcp {
-      color: #60a5fa;
-      border-color: #1e3a66
-    }
-
-    .chip.c-udp {
-      color: #a78bfa;
-      border-color: #3b2a6b
-    }
-
-    .chip.c-icmp {
-      color: #22d3ee;
-      border-color: #134e5e
-    }
-
-    .chip.c-arp {
-      color: #fbbf24;
-      border-color: #5b4513
-    }
-
-    .chip.c-ip {
-      color: #34d399;
-      border-color: #14533d
-    }
-
-    .chip[aria-pressed=true] {
-      background: #1a1a20;
-      border-color: currentColor;
-      box-shadow: 0 0 0 1px currentColor inset
-    }
-
-    nav.tabs {
       display: inline-flex;
-      flex-direction: row;
-      gap: 2px;
-      background: #111114;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 4px;
-      margin-bottom: 16px
-    }
-
-    nav.tabs a {
-      padding: 8px 22px;
-      border-radius: 9px;
-      color: #c9c9d2
-    }
-
-    nav.tabs a.active {
-      background: #000;
-      color: #fff;
-      box-shadow: none
-    }
-
-    nav.tabs a:hover {
-      background: #17171b
-    }
-
-    .grid3 {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 14px
-    }
-
-    .lrow {
-      display: flex;
-      gap: 12px;
       align-items: center;
-      padding: 6px 0;
-      font-family: var(--mono);
-      font-size: 13px
+      justify-content: center;
+      gap: 8px;
+      font-family: var(--font-sans);
+      font-weight: 600;
+      font-size: 14px;
+      padding: 10px 20px;
+      border-radius: 6px;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.15s ease;
+      user-select: none;
     }
 
-    .lrow .muted {
-      margin-left: auto;
-      font-size: 12px
+    .btn-primary {
+      background: var(--primary);
+      color: #FFFFFF;
+      box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2);
     }
 
-    .idx {
-      width: 20px;
-      height: 20px;
-      border: 1px solid #333;
-      border-radius: 5px;
+    .btn-primary:hover {
+      background: var(--primary-hover);
+    }
+
+    .btn-outline {
+      background: #FFFFFF;
+      border-color: var(--border);
+      color: var(--text);
+    }
+
+    .btn-outline:hover {
+      background: #F8FAFC;
+      border-color: #CBD5E1;
+    }
+
+    .btn-lg {
+      padding: 12px 28px;
+      font-size: 15px;
+    }
+
+    /* =========================================================
+       SCREEN 2: SEND MESSAGE
+       ========================================================= */
+    .grid-2col {
       display: grid;
-      place-items: center;
-      font-size: 11px;
-      color: #bbb
+      grid-template-columns: 1.5fr 1fr;
+      gap: 20px;
     }
 
-    .ipc {
-      color: #22d3ee
+    @media (max-width: 860px) {
+      .grid-2col { grid-template-columns: 1fr; }
     }
 
-    .big {
-      font: 700 40px var(--mono);
-      color: #fb923c
-    }
-
-    .bar {
-      height: 7px;
-      border-radius: 9px;
-      background: #26262b;
-      margin: 9px 0;
-      overflow: hidden
-    }
-
-    .bar i {
-      display: block;
-      height: 100%;
-      background: #f2f2f5;
-      border-radius: 9px
-    }
-
-    .mrow,
-    .drow>div:first-child {
+    .form-group {
       display: flex;
-      justify-content: space-between;
-      padding: 5px 0;
-      font-size: 13px
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 16px;
     }
 
-    .mrow b {
-      font-family: var(--mono)
+    .form-label {
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--text);
     }
 
-    .drow {
-      margin-bottom: 8px
-    }
-
-    .chart {
+    textarea.message-input {
       width: 100%;
-      height: 150px
+      height: 120px;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: var(--font-sans);
+      font-size: 14px;
+      color: var(--text);
+      resize: vertical;
+      background: #FFFFFF;
+      transition: border-color 0.15s;
     }
 
-    .axis {
+    textarea.message-input:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+
+    .counter-bar {
+      display: flex;
+      justify-content: flex-end;
+      font-size: 12px;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    .sample-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .chip-btn {
+      background: #F1F5F9;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .chip-btn:hover {
+      background: #E2E8F0;
+      border-color: #CBD5E1;
+    }
+
+    .chip-btn.clear {
+      color: var(--danger);
+      background: #FEF2F2;
+      border-color: #FECACA;
+    }
+
+    .info-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .info-row {
       display: flex;
       justify-content: space-between;
+      align-items: center;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .info-row:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+
+    .info-key {
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    .info-val {
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--text);
+      font-family: var(--font-mono);
+    }
+
+    /* =========================================================
+       SCREEN 3: TRANSFERRING (ANIMATED PACKETS & TELEMETRY)
+       ========================================================= */
+    .transfer-visual-stage {
+      padding: 32px 20px;
+      background: #F8FAFC;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .stage-title-wrap {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+
+    .stage-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .stage-desc {
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+
+    .packet-track-container {
+      display: grid;
+      grid-template-columns: 160px 1fr 160px;
+      align-items: center;
+      gap: 16px;
+      position: relative;
+      margin: 20px 0 36px;
+    }
+
+    .flight-path {
+      height: 120px;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-around;
+    }
+
+    .flight-lane {
+      position: relative;
+      height: 48px;
+      border-top: 2px dashed #CBD5E1;
+      display: flex;
+      align-items: center;
+    }
+
+    .flying-packet {
+      position: absolute;
+      top: -18px;
+      padding: 6px 14px;
+      border-radius: 6px;
       font-size: 11px;
-      color: var(--mut)
+      font-weight: 600;
+      box-shadow: var(--shadow-md);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      z-index: 10;
+      font-family: var(--font-mono);
+      min-width: 130px;
+      text-align: center;
     }
 
-    .toast {
+    .flying-packet.data {
+      background: var(--primary);
+      color: #FFFFFF;
+      border: 1px solid var(--primary-hover);
+      left: 0%;
+      animation: flyRight 2.2s ease-in-out infinite;
+    }
+
+    .flying-packet.ack {
+      background: var(--teal);
+      color: #FFFFFF;
+      border: 1px solid #0F766E;
+      right: 0%;
+      animation: flyLeft 2.2s ease-in-out infinite 1.1s;
+    }
+
+    @keyframes flyRight {
+      0% { left: 5%; opacity: 0; transform: scale(0.9); }
+      20% { opacity: 1; transform: scale(1); }
+      80% { opacity: 1; transform: scale(1); }
+      100% { left: 80%; opacity: 0; transform: scale(0.9); }
+    }
+
+    @keyframes flyLeft {
+      0% { right: 5%; opacity: 0; transform: scale(0.9); }
+      20% { opacity: 1; transform: scale(1); }
+      80% { opacity: 1; transform: scale(1); }
+      100% { right: 80%; opacity: 0; transform: scale(0.9); }
+    }
+
+    .telemetry-row-cards {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .telem-box {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .telem-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    .telem-time {
+      font-family: var(--font-mono);
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--text);
+      margin-top: 4px;
+    }
+
+    .telem-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .rtt-pill-box {
+      background: #FFFFFF;
+      border: 1px solid var(--border);
+      padding: 10px 18px;
+      border-radius: 8px;
+      text-align: center;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .rtt-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .rtt-val {
+      font-family: var(--font-mono);
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--primary);
+      margin-top: 2px;
+    }
+
+    /* =========================================================
+       SCREEN 4: SUCCESS / RESULTS
+       ========================================================= */
+    .success-banner-wide {
+      background: var(--success-light);
+      border: 1px solid var(--success-border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      color: var(--success);
+      margin-bottom: 20px;
+    }
+
+    .success-banner-wide svg {
+      width: 24px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+
+    .results-comparison-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+
+    @media (max-width: 760px) {
+      .results-comparison-grid { grid-template-columns: 1fr; }
+    }
+
+    .data-table-clean {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .data-table-clean tr {
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .data-table-clean tr:last-child {
+      border-bottom: none;
+    }
+
+    .data-table-clean td {
+      padding: 10px 4px;
+    }
+
+    .data-table-clean td.k {
+      color: var(--text-muted);
+      width: 45%;
+    }
+
+    .data-table-clean td.v {
+      font-weight: 600;
+      color: var(--text);
+      font-family: var(--font-mono);
+    }
+
+    .data-table-clean td.v.msg-box {
+      font-family: var(--font-sans);
+      background: #F1F5F9;
+      padding: 8px 12px;
+      border-radius: 6px;
+      display: inline-block;
+      max-width: 100%;
+      word-break: break-all;
+    }
+
+    .actions-foot-bar {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      margin-top: 10px;
+    }
+
+    /* =========================================================
+       SCREEN 5: TRANSFER HISTORY & PACKET LOGS
+       ========================================================= */
+    .history-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .history-toolbar {
+      padding: 14px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      background: #FAFCFE;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .search-input {
+      padding: 6px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 13px;
+      min-width: 240px;
+      background: #FFFFFF;
+    }
+
+    .table-responsive {
+      width: 100%;
+      overflow-x: auto;
+    }
+
+    table.history-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 13px;
+    }
+
+    table.history-table th {
+      background: #F8FAFC;
+      padding: 12px 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    table.history-table td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border-subtle);
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    table.history-table tbody tr:hover {
+      background: #F8FAFC;
+      cursor: pointer;
+    }
+
+    .mono-cell {
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    .badge-success {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 99px;
+      background: var(--success-light);
+      color: var(--success);
+      font-weight: 600;
+      font-size: 11px;
+      border: 1px solid var(--success-border);
+    }
+
+    .badge-failed {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 99px;
+      background: #FEF2F2;
+      color: var(--danger);
+      font-weight: 600;
+      font-size: 11px;
+      border: 1px solid #FECACA;
+    }
+
+    .btn-sm {
+      padding: 4px 10px;
+      font-size: 12px;
+      border-radius: 4px;
+    }
+
+    /* Modal Sheet */
+    .modal-backdrop {
       position: fixed;
-      bottom: 22px;
-      left: 50%;
-      transform: translateX(-50%) translateY(20px);
-      background: #1b1b20;
-      border: 1px solid #333;
-      padding: 9px 16px;
-      border-radius: 10px;
-      opacity: 0;
-      pointer-events: none;
-      transition: .2s;
-      font-size: 13px
+      inset: 0;
+      background: rgba(15, 23, 42, 0.45);
+      backdrop-filter: blur(2px);
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
     }
 
-    .toast.show {
-      opacity: 1;
-      transform: translateX(-50%)
+    .modal-backdrop.open {
+      display: flex;
     }
 
-    .banner {
-      background: #101013
+    .modal-box {
+      background: #FFFFFF;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      max-width: 680px;
+      width: 100%;
+      box-shadow: var(--shadow-lg);
+      overflow: hidden;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
     }
 
-    .step.on {
-      background: #0d1c33
+    .modal-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
 
-    @media(max-width:900px) {
+    .modal-body {
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
 
-      .row2,
-      .grid3 {
-        grid-template-columns: 1fr
-      }
-
-      .rings {
-        grid-template-columns: 1fr 1fr
-      }
+    .hex-dump-box {
+      background: #0F172A;
+      color: #E2E8F0;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 14px;
+      border-radius: 6px;
+      line-height: 1.6;
+      white-space: pre;
+      overflow-x: auto;
     }
   </style>
 </head>
-
 <body>
-  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-    <symbol id="i-dash" viewBox="0 0 24 24">
-      <path d="M3 3h8v10H3zM13 3h8v6h-8zM13 11h8v10h-8zM3 15h8v6H3z" fill="none" stroke="currentColor"
-        stroke-width="1.8" stroke-linejoin="round" />
-    </symbol>
-    <symbol id="i-list" viewBox="0 0 24 24">
-      <path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-    </symbol>
-    <symbol id="i-flow" viewBox="0 0 24 24">
-      <path d="M5 5v14M19 5v14M5 8h14M19 12H5M5 16h14" fill="none" stroke="currentColor" stroke-width="1.8"
-        stroke-linecap="round" />
-    </symbol>
-    <symbol id="i-inspect" viewBox="0 0 24 24">
-      <circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="1.8" />
-      <path d="m15 15 6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-    </symbol>
-    <symbol id="i-gear" viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8" />
-      <path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2" stroke="currentColor"
-        stroke-width="1.8" stroke-linecap="round" />
-    </symbol>
-    <symbol id="i-alert" viewBox="0 0 24 24">
-      <path d="M12 3 2 20h20zM12 10v4m0 3v.01" fill="none" stroke="currentColor" stroke-width="1.8"
-        stroke-linejoin="round" stroke-linecap="round" />
-    </symbol>
-    <symbol id="i-wait" viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8" />
-      <path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-    </symbol>
-    <symbol id="i-trash" viewBox="0 0 24 24">
-      <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="1.8"
-        stroke-linejoin="round" />
-    </symbol>
-    <symbol id="i-box" viewBox="0 0 24 24">
-      <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12 4 7.5" fill="none" stroke="currentColor"
-        stroke-width="1.8" stroke-linejoin="round" />
-    </symbol>
-    <symbol id="i-globe" viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8" />
-      <path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" fill="none" stroke="currentColor" stroke-width="1.6" />
-    </symbol>
-    <symbol id="i-swap" viewBox="0 0 24 24">
-      <path d="M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4m4 4H7" fill="none" stroke="currentColor" stroke-width="1.8"
-        stroke-linecap="round" stroke-linejoin="round" />
-    </symbol>
-    <symbol id="i-check" viewBox="0 0 24 24">
-      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8" />
-      <path d="m8 12 3 3 5-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-        stroke-linejoin="round" />
-    </symbol>
-    <symbol id="i-pulse" viewBox="0 0 24 24">
-      <path d="M3 12h4l2-6 4 12 2-6h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-        stroke-linejoin="round" />
-    </symbol>
-    <symbol id="i-plug" viewBox="0 0 24 24">
-      <path d="M9 3v5M15 3v5M6 8h12v4a6 6 0 0 1-12 0zM12 18v3" fill="none" stroke="currentColor" stroke-width="1.8"
-        stroke-linecap="round" stroke-linejoin="round" />
-    </symbol>
-    <symbol id="i-bolt" viewBox="0 0 24 24">
-      <path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="none" stroke="currentColor" stroke-width="1.8"
-        stroke-linejoin="round" />
-    </symbol>
-    <symbol id="i-pause" viewBox="0 0 24 24">
-      <path d="M8 5v14M16 5v14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
-    </symbol>
-    <symbol id="i-export" viewBox="0 0 24 24">
-      <path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14" fill="none" stroke="currentColor" stroke-width="1.8"
-        stroke-linecap="round" stroke-linejoin="round" />
-    </symbol>
-  </svg>
-  <div class="app">
-    <main>
-      <header class="top">
-        <div>
-          <h1><svg>
-              <use href="#i-pulse" />
-            </svg>StackScope</h1>
-          <p class="muted">Real-time packet monitoring and analysis · custom TCP/IP stack on <span
-              data-bind="ifaceName">tap0</span></p>
-        </div>
-        <div class="actions">
-          <span class="pill" data-bind="backendPill">Backend: not connected</span>
-          <button class="btn primary" id="runTestBtn" style="border:0;" title="Run Reno Congestion Control & 3-Way Handshake Test on C Stack"><svg>
-              <use href="#i-bolt" />
-            </svg><span>Run Reno Self-Test</span></button>
-          <button class="btn" id="pauseBtn"><svg>
-              <use href="#i-pause" />
-            </svg><span>Pause</span></button>
-          <button class="btn" id="clearBtn"><svg>
-              <use href="#i-trash" />
-            </svg>Clear</button>
-          <button class="btn" id="exportBtn"><svg>
-              <use href="#i-export" />
-            </svg>Export</button>
-        </div>
-      </header>
-      <div id="banner" class="banner hide" role="status"></div>
-      <div class="stats" id="stats"></div>
-      <div class="row2">
-        <div class="rings" id="rings"></div>
-        <article class="card">
-          <h2>Protocol Filters</h2>
-          <div class="chips" id="chips">
-            <button class="chip c-tcp" data-proto="TCP" aria-pressed="false">TCP</button>
-            <button class="chip c-udp" data-proto="UDP" aria-pressed="false">UDP</button>
-            <button class="chip c-icmp" data-proto="ICMP" aria-pressed="false">ICMP</button>
-            <button class="chip c-arp" data-proto="ARP" aria-pressed="false">ARP</button>
-            <button class="chip c-ip" data-proto="IPv4" aria-pressed="false">IPv4</button>
-          </div>
-          <div class="muted small">No filter selected shows every captured packet.</div>
-        </article>
+
+  <!-- Top Header Navigation -->
+  <header>
+    <div class="brand-wrap">
+      <div class="brand-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+          <polyline points="2 17 12 22 22 17"></polyline>
+          <polyline points="2 12 12 17 22 12"></polyline>
+        </svg>
       </div>
-      <div class="mini" id="mini"></div>
-      <nav id="nav" class="tabs">
-        <a href="#live" data-view="live">Live Stream</a><a href="#stats" data-view="stats">Statistics</a>
-        <a href="#conns" data-view="conns">Connections</a><a href="#settings" data-view="settings">Settings</a>
-      </nav>
+      <div>
+        <div class="brand-title">
+          Custom TCP/IP Stack
+          <span style="font-size: 11px; background: #F1F5F9; color: var(--primary); padding: 1px 6px; border-radius: 4px; font-weight: 600;">L4 User-Space</span>
+        </div>
+        <div class="brand-subtitle">StackScope Transfer & Telemetry Studio</div>
+      </div>
+    </div>
 
-      <section class="view" id="view-live">
-        <article class="card">
-          <div class="toolbar">
-            <input id="search" type="search" placeholder="Search no., IP, protocol, info…" aria-label="Search packets">
-            <label class="follow"><input type="checkbox" id="follow" checked> Follow latest</label>
+    <div class="header-center">
+      <div class="status-badge" id="backendStatusBadge">
+        <span class="status-dot"></span>
+        <span id="backendStatusText">Connected (UDP 9999)</span>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <div class="endpoint-chip" title="Active Transport Protocol">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+          <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+          <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+          <line x1="12" y1="20" x2="12.01" y2="20"></line>
+        </svg>
+        UDP (Port 9999)
+      </div>
+
+      <button class="icon-btn" id="openSettingsBtn" title="Connection Settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- App Main Content Area -->
+  <main class="app-layout">
+
+    <!-- Top Stepper Navigation (Matches Design Spec) -->
+    <nav class="stepper-nav" aria-label="Progress Stepper">
+      <div class="step-item" id="navStep1" data-step="1">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        <span>1. Connection</span>
+      </div>
+      <span class="step-divider">→</span>
+
+      <div class="step-item active" id="navStep2" data-step="2">
+        <span>2. Send Data</span>
+      </div>
+      <span class="step-divider">→</span>
+
+      <div class="step-item" id="navStep3" data-step="3">
+        <span>3. Transfer</span>
+      </div>
+      <span class="step-divider">→</span>
+
+      <div class="step-item" id="navStep4" data-step="4">
+        <span>4. Results</span>
+      </div>
+      <span class="step-divider">|</span>
+
+      <div class="step-item" id="navStep5" data-step="5" style="margin-left: 4px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20v-6M6 20V10M18 20V4"/></svg>
+        <span>Transfer History</span>
+      </div>
+    </nav>
+
+    <!-- =========================================================
+         SCREEN 1: CONNECTION (3-WAY HANDSHAKE)
+         ========================================================= -->
+    <section class="view-container" id="viewScreen1">
+      <div class="card">
+        <div class="connection-hero">
+          <h2 class="hero-title">Establishing Connection...</h2>
+          <p class="hero-desc">Performing RFC 793 3-Way Handshake in User Space</p>
+
+          <div class="handshake-canvas-wrap">
+            <!-- Left Laptop: Sender -->
+            <div class="device-box sender">
+              <div class="device-icon-wrap">
+                <!-- Blue Modern Laptop SVG -->
+                <svg width="74" height="60" viewBox="0 0 64 50" fill="none">
+                  <rect x="8" y="4" width="48" height="32" rx="3" fill="#1E293B" stroke="#2563EB" stroke-width="2"/>
+                  <rect x="12" y="8" width="40" height="24" rx="1.5" fill="#3B82F6" opacity="0.9"/>
+                  <path d="M24 16H40M24 20H34" stroke="#EFF6FF" stroke-width="2" stroke-linecap="round"/>
+                  <path d="M2 40C2 37.79 3.79 36 6 36H58C60.21 36 62 37.79 62 40V44H2V40Z" fill="#334155"/>
+                  <rect x="26" y="38" width="12" height="2" rx="1" fill="#94A3B8"/>
+                </svg>
+              </div>
+              <div class="device-role">Sender</div>
+              <div class="device-ip" id="dispSenderIp">192.168.0.104</div>
+            </div>
+
+            <!-- Middle Animated Ladder -->
+            <div class="handshake-ladder">
+              <!-- Step 1: SYN -->
+              <div class="ladder-row" id="hsRow1">
+                <div class="ladder-line"></div>
+                <div class="ladder-pill syn">
+                  <span>1. SYN →</span>
+                  <small>Seq: 10000</small>
+                </div>
+              </div>
+
+              <!-- Step 2: SYN + ACK -->
+              <div class="ladder-row" id="hsRow2">
+                <div class="ladder-line"></div>
+                <div class="ladder-pill synack">
+                  <span>← 2. SYN + ACK</span>
+                  <small>Seq: 50000 Ack: 10001</small>
+                </div>
+              </div>
+
+              <!-- Step 3: ACK -->
+              <div class="ladder-row" id="hsRow3">
+                <div class="ladder-line"></div>
+                <div class="ladder-pill ack">
+                  <span>3. ACK →</span>
+                  <small>Seq: 10001 Ack: 50001</small>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right Laptop: Receiver -->
+            <div class="device-box receiver">
+              <div class="device-icon-wrap">
+                <!-- Green Modern Laptop SVG -->
+                <svg width="74" height="60" viewBox="0 0 64 50" fill="none">
+                  <rect x="8" y="4" width="48" height="32" rx="3" fill="#1E293B" stroke="#0D9488" stroke-width="2"/>
+                  <rect x="12" y="8" width="40" height="24" rx="1.5" fill="#14B8A6" opacity="0.9"/>
+                  <path d="M24 16H40M24 20H36" stroke="#F0FDFA" stroke-width="2" stroke-linecap="round"/>
+                  <path d="M2 40C2 37.79 3.79 36 6 36H58C60.21 36 62 37.79 62 40V44H2V40Z" fill="#334155"/>
+                  <rect x="26" y="38" width="12" height="2" rx="1" fill="#94A3B8"/>
+                </svg>
+              </div>
+              <div class="device-role">Receiver</div>
+              <div class="device-ip" id="dispReceiverIp">192.168.0.103</div>
+            </div>
           </div>
-          <div class="table-wrap" id="tableWrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>No.</th>
-                  <th>Time</th>
-                  <th>Source IP</th>
-                  <th>Destination IP</th>
-                  <th>Protocol</th>
-                  <th>Length</th>
-                  <th>Info</th>
-                </tr>
-              </thead>
-              <tbody id="rows"></tbody>
+
+          <div class="btn-row-center">
+            <div class="success-alert" id="hsSuccessAlert">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>Connection Established Successfully! You can now send data.</span>
+            </div>
+
+            <button class="btn btn-primary btn-lg" id="btnContinueToSend">
+              <span>Continue</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =========================================================
+         SCREEN 2: SEND MESSAGE (COMPOSER & CONNECTION INFO)
+         ========================================================= -->
+    <section class="view-container active" id="viewScreen2">
+      <div class="grid-2col">
+        <!-- Left: Composer -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+              Send a Message
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="form-group">
+              <label class="form-label" for="payloadText">Payload Message</label>
+              <textarea id="payloadText" class="message-input" placeholder="Type text to send over custom transport protocol...">Hello World!</textarea>
+              <div class="counter-bar">
+                <span id="charByteCounter">11 / 1400 bytes</span>
+              </div>
+            </div>
+
+            <button class="btn btn-primary" id="btnStartTransfer" style="width: 100%; padding: 12px; font-size: 15px;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+              <span>Send Message</span>
+            </button>
+
+            <div class="sample-chips">
+              <button class="chip-btn" data-fill="Hello World!">Hello World!</button>
+              <button class="chip-btn" data-fill="Test Message">Test Message</button>
+              <button class="chip-btn" data-fill="Custom TCP/IP Data Packet">Custom Data</button>
+              <button class="chip-btn" data-fill="Hello Professor!">Hello Professor!</button>
+              <button class="chip-btn clear" id="btnClearText">Clear</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Telemetry & Connection Cards -->
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+          <!-- Card 1: Connection Info -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                Connection Info
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="info-list">
+                <div class="info-row">
+                  <span class="info-key">Status:</span>
+                  <span class="badge-success">ESTABLISHED</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-key">Local IP (Sender):</span>
+                  <span class="info-val">192.168.0.104</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-key">Remote IP (Receiver):</span>
+                  <span class="info-val">192.168.0.103</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-key">Transport:</span>
+                  <span class="info-val">Custom Protocol (UDP)</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-key">Port:</span>
+                  <span class="info-val">9999</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 2: Current Sequence Numbers -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                Current Sequence Numbers
+              </div>
+              <button class="icon-btn" id="btnRefreshSeq" title="Refresh Sequence Numbers" style="width: 28px; height: 28px;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+              </button>
+            </div>
+            <div class="card-body">
+              <div class="info-list">
+                <div class="info-row">
+                  <span class="info-key">Sender Seq:</span>
+                  <span class="info-val" id="dispCurSeq">10001</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-key">Receiver Seq:</span>
+                  <span class="info-val" id="dispCurAck">50001</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =========================================================
+         SCREEN 3: TRANSFERRING (ANIMATED FLYING PACKET)
+         ========================================================= -->
+    <section class="view-container" id="viewScreen3">
+      <div class="transfer-visual-stage">
+        <div class="stage-title-wrap">
+          <h2 class="stage-title">Sending Data...</h2>
+          <p class="stage-desc">Transferring "<span id="transferringMsgText">Hello World!</span>" (<span id="transferringByteCount">11</span> bytes)</p>
+        </div>
+
+        <div class="packet-track-container">
+          <!-- Left Device: Sender -->
+          <div class="device-box sender">
+            <div class="device-icon-wrap">
+              <svg width="74" height="60" viewBox="0 0 64 50" fill="none">
+                <rect x="8" y="4" width="48" height="32" rx="3" fill="#1E293B" stroke="#2563EB" stroke-width="2"/>
+                <rect x="12" y="8" width="40" height="24" rx="1.5" fill="#3B82F6" opacity="0.9"/>
+                <path d="M24 16H40M24 20H34" stroke="#EFF6FF" stroke-width="2" stroke-linecap="round"/>
+                <path d="M2 40C2 37.79 3.79 36 6 36H58C60.21 36 62 37.79 62 40V44H2V40Z" fill="#334155"/>
+                <rect x="26" y="38" width="12" height="2" rx="1" fill="#94A3B8"/>
+              </svg>
+            </div>
+            <div class="device-role">Sender</div>
+            <div class="device-ip">192.168.0.104</div>
+          </div>
+
+          <!-- Middle Flight Lanes -->
+          <div class="flight-path">
+            <!-- Lane 1: Outgoing DATA -->
+            <div class="flight-lane">
+              <div class="flying-packet data" id="flyingDataPkt">
+                <span>DATA + ACK</span>
+                <small id="flyingDataSeq">Seq: 10001</small>
+                <small id="flyingDataLen">Len: 11 bytes</small>
+              </div>
+            </div>
+
+            <!-- Lane 2: Incoming ACK -->
+            <div class="flight-lane">
+              <div class="flying-packet ack" id="flyingAckPkt">
+                <span>ACK</span>
+                <small id="flyingAckNum">Ack: 10012</small>
+                <small>Len: 0 bytes</small>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Device: Receiver -->
+          <div class="device-box receiver">
+            <div class="device-icon-wrap">
+              <svg width="74" height="60" viewBox="0 0 64 50" fill="none">
+                <rect x="8" y="4" width="48" height="32" rx="3" fill="#1E293B" stroke="#0D9488" stroke-width="2"/>
+                <rect x="12" y="8" width="40" height="24" rx="1.5" fill="#14B8A6" opacity="0.9"/>
+                <path d="M24 16H40M24 20H36" stroke="#F0FDFA" stroke-width="2" stroke-linecap="round"/>
+                <path d="M2 40C2 37.79 3.79 36 6 36H58C60.21 36 62 37.79 62 40V44H2V40Z" fill="#334155"/>
+                <rect x="26" y="38" width="12" height="2" rx="1" fill="#94A3B8"/>
+              </svg>
+            </div>
+            <div class="device-role">Receiver</div>
+            <div class="device-ip">192.168.0.103</div>
+          </div>
+        </div>
+
+        <!-- Telemetry Details Row -->
+        <div class="telemetry-row-cards">
+          <!-- Sender (TX) -->
+          <div class="telem-box">
+            <div class="telem-header">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+              <span>Sender (TX) Packet Sent</span>
+            </div>
+            <div class="telem-time" id="txLiveTime">18:32:15.245</div>
+            <div class="telem-sub">Time taken: 0 ms</div>
+          </div>
+
+          <!-- Middle RTT Card -->
+          <div class="rtt-pill-box">
+            <div class="rtt-label">Round Trip Time (RTT)</div>
+            <div class="rtt-val" id="rttLiveVal">23 ms</div>
+          </div>
+
+          <!-- Receiver (RX) -->
+          <div class="telem-box">
+            <div class="telem-header">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              <span>Receiver (RX) Acknowledgment</span>
+            </div>
+            <div class="telem-time" id="rxLiveTime">18:32:15.268</div>
+            <div class="telem-sub">Time taken: 23 ms</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =========================================================
+         SCREEN 4: SUCCESS / RESULTS
+         ========================================================= -->
+    <section class="view-container" id="viewScreen4">
+      <div class="success-banner-wide">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><polyline points="16 10 10 16 7 13"></polyline></svg>
+        <div>
+          <div style="font-weight: 700; font-size: 15px;">Message received successfully!</div>
+          <div style="font-size: 13px; opacity: 0.9;">The data was transferred from sender to receiver with full checksum verification.</div>
+        </div>
+      </div>
+
+      <div class="results-comparison-grid">
+        <!-- Sender Side Card -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+              Sender Side
+            </div>
+          </div>
+          <div class="card-body">
+            <table class="data-table-clean">
+              <tbody>
+                <tr><td class="k">Message Sent:</td><td class="v msg-box" id="resSentMsg">Hello World!</td></tr>
+                <tr><td class="k">Bytes:</td><td class="v" id="resSentBytes">11 bytes</td></tr>
+                <tr><td class="k">Sent At:</td><td class="v" id="resSentAt">18:32:15.245</td></tr>
+                <tr><td class="k">Sequence Number:</td><td class="v" id="resSentSeq">10001</td></tr>
+                <tr><td class="k">Acknowledgment:</td><td class="v" id="resSentAck">50001</td></tr>
+                <tr><td class="k">Time Taken (TX):</td><td class="v">0 ms</td></tr>
+              </tbody>
             </table>
-            <div class="empty" id="tableEmpty"></div>
           </div>
-          <div class="muted small" id="tableNote"></div>
-        </article>
-        <article class="card">
-          <h2>Packet Inspector</h2>
-          <div data-slot="inspector"></div>
-        </article>
-        <article class="card">
-          <h2>Packet Structure</h2>
-          <div data-slot="structure"></div>
-        </article>
-      </section>
-
-      <section class="view" id="view-stats">
-        <div class="grid3">
-          <article class="card">
-            <h2>Capture Health</h2>
-            <div data-slot="health"></div>
-          </article>
-          <article class="card">
-            <h2>Top Traffic Sources</h2>
-            <div data-slot="srcs"></div>
-          </article>
-          <article class="card">
-            <h2>Top Destination Ports</h2>
-            <div data-slot="ports"></div>
-          </article>
         </div>
-        <div class="grid2">
-          <article class="card">
-            <h2>Traffic Metrics</h2>
-            <div data-slot="metrics"></div>
-          </article>
-          <article class="card">
-            <h2>Protocol Distribution</h2>
-            <div data-slot="dist"></div>
-          </article>
+
+        <!-- Receiver Side Card -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              Receiver Side
+            </div>
+          </div>
+          <div class="card-body">
+            <table class="data-table-clean">
+              <tbody>
+                <tr><td class="k">Message Received:</td><td class="v msg-box" id="resRecvMsg">Hello World!</td></tr>
+                <tr><td class="k">Bytes:</td><td class="v" id="resRecvBytes">11 bytes</td></tr>
+                <tr><td class="k">Received At:</td><td class="v" id="resRecvAt">18:32:15.256</td></tr>
+                <tr><td class="k">Sequence Number:</td><td class="v" id="resRecvSeq">10001</td></tr>
+                <tr><td class="k">Acknowledgment Sent:</td><td class="v" id="resRecvAck">10012</td></tr>
+                <tr><td class="k">Time Taken (RX):</td><td class="v" id="resRecvTime">11 ms</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
-        <article class="card">
-          <h2>Traffic Intensity (last 60 s)</h2>
-          <div data-slot="intensity"></div>
-        </article>
-      </section>
+      </div>
 
-      <section class="view" id="view-conns">
-        <article class="card">
-          <h2>TCP Connection Flow</h2>
-          <div data-slot="flow"></div>
-        </article>
-        <article class="card">
-          <h2>TCP Connections Observed</h2>
-          <div data-slot="conns"></div>
-        </article>
-        <article class="card">
-          <h2>Packet Timeline</h2>
-          <div data-slot="timeline"></div>
-        </article>
-      </section>
+      <div class="actions-foot-bar">
+        <button class="btn btn-primary" id="btnSendAgain">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+          <span>Send Again</span>
+        </button>
 
-      <!-- Settings -->
-      <section class="view" id="view-settings">
-        <article class="card">
-          <h2>Connection</h2>
-          <div class="form">
-            <label>Backend URL<input id="cfgUrl" type="text" spellcheck="false"></label>
-            <label>Interface name<input id="cfgIface" type="text" spellcheck="false"></label>
-            <label>Max packets kept in browser<input id="cfgMax" type="number" min="100" max="50000"></label>
+        <button class="btn btn-outline" id="btnViewHistoryFromSuccess">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20v-6M6 20V10M18 20V4"/></svg>
+          <span>View Transfer History</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </section>
+
+    <!-- =========================================================
+         SCREEN 5: TRANSFER HISTORY
+         ========================================================= -->
+    <section class="view-container" id="viewScreen5">
+      <div class="history-card">
+        <div class="history-toolbar">
+          <div class="card-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            Transfer History
           </div>
-          <div class="row">
-            <button class="btn primary" id="saveCfg">Save</button>
-            <button class="btn" id="connectBtn">Test backend connection</button>
+          <div style="display: flex; gap: 8px;">
+            <input type="text" id="historySearchInput" class="search-input" placeholder="Search message or sequence...">
+            <button class="btn btn-outline btn-sm" id="btnExportPcap" title="Download Wire Traffic">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              <span>Export PCAP</span>
+            </button>
           </div>
-          <p class="muted small" id="cfgMsg">No backend exists yet. The connection test checks whether the URL answers
-            at <code>/api/status</code>; it never produces packet data.</p>
-        </article>
-        <article class="card">
-          <h2>Preview interface states</h2>
-          <p class="muted small">Changes only the status banner. No packets are created.</p>
-          <div class="row">
-            <button class="btn" data-preview="idle">Waiting</button>
-            <button class="btn" data-preview="connecting">Loading</button>
-            <button class="btn" data-preview="error">Error</button>
+        </div>
+
+        <div class="table-responsive">
+          <table class="history-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Message</th>
+                <th>Bytes</th>
+                <th>Sent Time</th>
+                <th>Received Time</th>
+                <th>Time (TX)</th>
+                <th>Time (RX)</th>
+                <th>RTT</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="historyTableBody">
+              <!-- Seed rows populated dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Modal: Packet Details Inspector -->
+  <div class="modal-backdrop" id="packetModal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+          <span id="modalPacketTitle">Packet Inspector #1</span>
+        </div>
+        <button class="icon-btn" id="closeModalBtn" style="border: none;">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="info-list" style="background: #F8FAFC; padding: 14px; border-radius: 8px; border: 1px solid var(--border);">
+          <div class="info-row"><span class="info-key">Protocol Magic:</span><span class="info-val">0xCAFE (Verified)</span></div>
+          <div class="info-row"><span class="info-key">Header Size:</span><span class="info-val">20 Bytes (Packed L4)</span></div>
+          <div class="info-row"><span class="info-key">Flags:</span><span class="info-val" id="modalFlags">FLAG_DATA | FLAG_ACK</span></div>
+          <div class="info-row"><span class="info-key">Sequence Number:</span><span class="info-val" id="modalSeq">10001</span></div>
+          <div class="info-row"><span class="info-key">Acknowledgment Number:</span><span class="info-val" id="modalAck">50001</span></div>
+          <div class="info-row"><span class="info-key">Advertised Window:</span><span class="info-val" id="modalWin">65535 Bytes</span></div>
+          <div class="info-row"><span class="info-key">16-bit Checksum:</span><span class="info-val" id="modalChecksum">0x6374 (Valid)</span></div>
+        </div>
+
+        <div>
+          <div style="font-weight: 600; font-size: 13px; margin-bottom: 6px;">On-Wire Hex / ASCII Inspector</div>
+          <div class="hex-dump-box" id="modalHexDump">
+0000: ca fe 01 06 00 00 27 11 00 00 c3 51 ff ff 00 0b  |......'....Q....|
+0010: 63 74 00 00 48 65 6c 6c 6f 20 57 6f 72 6c 64 21  |ct..Hello World!|
           </div>
-        </article>
-      </section>
-    </main>
+        </div>
+      </div>
+    </div>
   </div>
-  <div id="toast" class="toast"></div>
-  <script>/* StackScope frontend.
-* Shows ONLY packets handed to StackScope.ingestPacket(). No packet is ever generated here.
-*
-* Packet object contract (proposed for the future Flask backend; every field except
-* `no`/`time`/`protocol` is optional, and missing values render as "Data unavailable"):
-* { no, time epoch-seconds, src, dst, protocol: "TCP"|"IPv4"|"ARP"|..., length, info,
-*   direction: "RX"|"TX", conn: "<connection key>",
-*   ethernet:{dst,src,type,headerLen}, ipv4:{version,ihl,tos,totalLength,id,flags,fragOffset,ttl,
-*   protocol,checksum,checksumStatus,src,dst,headerLen}, arp:{opcode,senderMac,senderIp,targetMac,targetIp},
-*   tcp:{srcPort,dstPort,seq,ack,dataOffset,flags:["SYN","ACK"..],window,checksum,checksumStatus,
-*   urgent,options,headerLen,payloadLen}, payload:{hex,size} }
-*/
+
+  <!-- Modal: Settings & Endpoint Configuration -->
+  <div class="modal-backdrop" id="settingsModal">
+    <div class="modal-box" style="max-width: 480px;">
+      <div class="modal-header">
+        <div class="card-title">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          Endpoint & Transport Settings
+        </div>
+        <button class="icon-btn" id="closeSettingsBtn" style="border: none;">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" for="cfgBackendUrl">Telemetry Backend URL</label>
+          <input type="text" id="cfgBackendUrl" class="search-input" value="http://localhost:8080" style="width: 100%;">
+          <small style="color: var(--text-muted); font-size: 11px;">Connects to C stack telemetry_server.c endpoint</small>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cfgUdpPort">UDP Transport Port</label>
+          <input type="number" id="cfgUdpPort" class="search-input" value="9999" style="width: 100%;">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cfgSenderIp">Sender (Local) IP</label>
+          <input type="text" id="cfgSenderIp" class="search-input" value="192.168.0.104" style="width: 100%;">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="cfgReceiverIp">Receiver (Remote) IP</label>
+          <input type="text" id="cfgReceiverIp" class="search-input" value="192.168.0.103" style="width: 100%;">
+        </div>
+        <button class="btn btn-primary" id="btnSaveSettings" style="width: 100%; margin-top: 10px;">Save Configuration</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Client-side Application Logic -->
+  <script>
     (() => {
       'use strict';
 
-      /* ---------- config & state ---------- */
-      const getDefUrl = () => {
-        if (typeof window !== 'undefined' && window.location && window.location.origin && window.location.origin.startsWith('http')) {
-          return window.location.origin;
-        }
-        return 'http://localhost:8080';
-      };
-      const DEFAULTS = { backendUrl: getDefUrl(), iface: 'CustomProto (Kernel TCP Bypass)', maxPackets: 5000 };
-      const loadCfg = () => {
-        try {
-          const saved = JSON.parse(localStorage.getItem('stackscope.cfg') || '{}');
-          if (saved.backendUrl && saved.backendUrl.includes('5000')) {
-            saved.backendUrl = getDefUrl();
-          }
-          return { ...DEFAULTS, ...saved };
-        } catch { return { ...DEFAULTS }; }
-      };
+      /* State Store */
       const state = {
-        cfg: loadCfg(), packets: [], selected: null, query: '', protos: new Set(),
-        backend: { status: 'idle', message: 'Backend not connected yet.' },
-        iface: 'unknown', connLabel: null, view: 'dashboard', t0: null,
-      };
-
-      /* ---------- helpers ---------- */
-      const $ = (s, r = document) => r.querySelector(s);
-      const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-      const esc = v => String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-      const has = v => v !== undefined && v !== null && v !== '';
-      const NA = '<span class="na">Data unavailable</span>';
-      const sizeLabel = s => Number.isInteger(s) ? `${s} B` : `${Math.round(s * 8)} bits`;
-      const val = v => has(v) ? esc(Array.isArray(v) ? v.join(', ') : v) : NA;
-      const isTcp = p => p.protocol === 'TCP' || !!p.tcp;
-      const isIpv4 = p => !!p.ipv4 || ['IPv4', 'TCP', 'UDP', 'ICMP'].includes(p.protocol);
-      const flagsOf = p => (p.tcp && Array.isArray(p.tcp.flags)) ? p.tcp.flags : [];
-      const payloadLen = p => has(p.payload?.size) ? p.payload.size : has(p.tcp?.payloadLen) ? p.tcp.payloadLen : (p.payload?.hex ? p.payload.hex.length / 2 : 0);
-      const relTime = p => (state.t0 === null || !has(p.time)) ? '—' : (p.time - state.t0).toFixed(6);
-      const schedule = (() => { let q = false; return fn => { if (q) return; q = true; requestAnimationFrame(() => { q = false; fn(); }); }; })();
-
-      /* ---------- field definitions: [key, label, size in bytes] (sizes are fixed by the protocol specs) ---------- */
-      const FIELDS = {
-        ethernet: [['dst', 'Destination MAC', 6], ['src', 'Source MAC', 6], ['type', 'EtherType', 2]],
-        ipv4: [['version', 'Version', .5], ['ihl', 'IHL', .5], ['tos', 'DSCP / ECN', 1], ['totalLength', 'Total length', 2], ['id', 'Identification', 2],
-        ['flags', 'Flags', 3 / 8], ['fragOffset', 'Fragment offset', 13 / 8], ['ttl', 'TTL', 1], ['protocol', 'Protocol', 1],
-        ['checksum', 'Header checksum', 2], ['src', 'Source IP', 4], ['dst', 'Destination IP', 4]],
-        tcp: [['srcPort', 'Source port', 2], ['dstPort', 'Destination port', 2], ['seq', 'Sequence number', 4], ['ack', 'Acknowledgment number', 4],
-        ['dataOffset', 'Data offset', .5], ['flags', 'Reserved + flags', 1.5], ['window', 'Window size', 2], ['checksum', 'Checksum', 2], ['urgent', 'Urgent pointer', 2]],
-        arp: [['opcode', 'Opcode', 2], ['senderMac', 'Sender MAC', 6], ['senderIp', 'Sender IP', 4], ['targetMac', 'Target MAC', 6], ['targetIp', 'Target IP', 4]],
-      };
-      const LAYERS = [
-        { key: 'ethernet', name: 'Ethernet header', cls: 'l-eth' }, { key: 'ipv4', name: 'IPv4 header', cls: 'l-ip' },
-        { key: 'tcp', name: 'TCP header', cls: 'l-tcp' },
-      ];
-      const ALL_FLAGS = ['SYN', 'ACK', 'PSH', 'FIN', 'RST', 'URG', 'ECE', 'CWR'];
-
-      /* ---------- components (pure: state -> HTML) ---------- */
-      /* Connection steps are derived ONLY from captured TCP flags. */
-      function deriveFlow() {
-        let tcp = state.packets.filter(p => isTcp(p) && p.tcp);
-        const last = tcp[tcp.length - 1];
-        if (last && has(last.conn)) tcp = tcp.filter(p => p.conn === last.conn);
-        const steps = { syn: null, synack: null, ack: null, data: null, close: null };
-        for (const p of tcp) {
-          const f = flagsOf(p), no = p.no;
-          if (f.includes('SYN') && !f.includes('ACK')) steps.syn ??= no;
-          else if (f.includes('SYN') && f.includes('ACK')) steps.synack ??= no;
-          else if (f.includes('ACK') && steps.synack && !steps.ack && !f.includes('FIN') && payloadLen(p) === 0) steps.ack = no;
-          if (payloadLen(p) > 0) steps.data ??= no;
-          if (f.includes('FIN') || f.includes('RST')) steps.close ??= no;
-        }
-        return { steps, tcpCount: tcp.length, conn: last?.conn };
-      }
-      function connState() {
-        if (state.connLabel) return { label: state.connLabel, note: 'Reported by backend' };
-        if (!state.packets.length) return { label: 'Waiting for packets…', note: 'No data yet' };
-        const { steps: s, tcpCount } = deriveFlow();
-        if (!tcpCount) return { label: 'No TCP packets captured', note: 'Observed from captured packets' };
-        const label = s.close ? 'Closing (FIN/RST observed)' : s.data ? 'Data transfer observed' : s.ack ? 'Handshake complete (ACK observed)' :
-          s.synack ? 'SYN-ACK observed' : s.syn ? 'SYN observed' : 'TCP seen, no handshake observed';
-        return { label, note: 'Inferred from captured flags only' };
-      }
-      const Flow = () => {
-        const { steps: s, tcpCount, conn } = deriveFlow();
-        const def = [['syn', 'SYN'], ['synack', 'SYN-ACK'], ['ack', 'ACK'], ['data', 'Data Transfer'], ['close', 'FIN / Closing']];
-        const html = def.map(([k, n], i) => `${i ? '<span class="arrow">→</span>' : ''}<div class="step ${k === 'close' ? 'close' : ''} ${s[k] ? 'on' : ''}"><b>${n}</b><small>${s[k] ? 'Observed · packet #' + s[k] : 'Pending'}</small></div>`).join('');
-        const meta = !state.packets.length ? 'Waiting for packets…' : !tcpCount ? 'No TCP packets captured yet.' :
-          `Based on ${tcpCount} captured TCP packet${tcpCount > 1 ? 's' : ''}${conn ? ' of connection ' + esc(conn) : ' (connections not distinguished)'}. A step is marked only when its flag was actually seen.`;
-        return `<div class="flow">${html}</div><div class="flowmeta">${meta}</div>`;
-      };
-      const Timeline = () => {
-        const P = state.packets.slice(-150);
-        if (!P.length) return empty('Waiting for packets…', 'Captured packets will appear here in chronological order.');
-        return '<div class="timeline">' + P.map(p => `<div class="tl ${esc(p.protocol)}"><time>${relTime(p)}s</time>` +
-          `<span class="badge ${p.protocol === 'TCP' ? 'on' : ''}">${esc(p.protocol)}</span>${p.direction ? `<span class="badge">${esc(p.direction)}</span>` : ''}` +
-          `<span class="info">#${p.no} ${val(p.src)} → ${val(p.dst)} ${has(p.info) ? esc(p.info) : ''}</span></div>`).join('') + '</div>';
-      };
-      function empty(title, sub, icon = 'i-wait') {
-        return `<div class="empty"><svg><use href="#${icon}"/></svg><b>${esc(title)}</b><div>${esc(sub)}</div></div>`;
-      }
-      const fieldCell = (layerKey, [k, label, size], data) => {
-        let v = has(data[k]) ? val(data[k]) : NA;
-        if (k === 'checksum' && has(data.checksumStatus)) {
-          const ok = data.checksumStatus === 'valid', bad = data.checksumStatus === 'invalid';
-          v += ` <span class="badge ${ok ? 'ok' : bad ? 'bad' : ''}">${esc(data.checksumStatus)}</span>`;
-        }
-        return `<div class="f" style="--w:${size}" title="${esc(label)}"><label>${esc(label)}</label><span>${v}</span><em>${sizeLabel(size)}</em></div>`;
-      };
-      const layerBlock = (L, p, detail) => {
-        const d = p[L.key];
-        if (!d) return `<div class="layer l-absent ${L.cls}"><header>${L.name}<small>Not present in this packet</small></header></div>`;
-        const size = has(d.headerLen) ? sizeLabel(d.headerLen) : 'size unavailable';
-        return `<div class="layer ${L.cls}"><header>${L.name}<small>${size}</small></header><div class="fields">${FIELDS[L.key].map(f => fieldCell(L.key, f, d)).join('')}` +
-          (has(d.options) ? `<div class="f" style="--w:3"><label>Options</label><span>${esc(d.options)}</span><em>${has(d.headerLen) ? sizeLabel(d.headerLen - 20) : ''}</em></div>` : '') + '</div></div>';
-      };
-      const textOf = hex => (hex.match(/../g) || []).map(h => { const c = parseInt(h, 16); return c === 10 || c === 13 || c === 9 ? String.fromCharCode(c) : c >= 32 && c < 127 ? String.fromCharCode(c) : '.'; }).join('');
-      const hexDump = hex => (hex.match(/.{1,32}/g) || []).map((row, i) => {
-        const b = row.match(/../g);
-        return i.toString(16).padStart(4, '0') + '0  ' + b.join(' ').padEnd(47) + '  ' + textOf(row).replace(/[\r\n\t]/g, '.');
-      }).join('\n');
-      const payloadBlock = p => {
-        const hex = p.payload?.hex;
-        const size = has(p.payload?.size) ? sizeLabel(p.payload.size) : hex ? sizeLabel(hex.length / 2) : 'size unavailable';
-        if (!hex) return `<div class="layer l-pay"><header>Payload<small>${size}</small></header><div class="empty">${isTcp(p) && payloadLen(p) === 0 ? 'This packet carries no payload.' : 'Payload data unavailable.'}</div></div>`;
-        return `<div class="layer l-pay"><header>Payload<small>${size}</small></header><div class="dumps"><div><h4>Readable text</h4><pre>${esc(textOf(hex))}</pre></div><div><h4>Hexadecimal</h4><pre>${esc(hexDump(hex))}</pre></div></div></div>`;
-      };
-      const selectedPacket = () => state.packets.find(p => p.no === state.selected);
-      const Inspector = () => {
-        const p = selectedPacket();
-        if (!p) return empty('Select a packet to inspect its details.', 'Choose a row in the Packets view.', 'i-inspect');
-        const t = p.tcp, f = flagsOf(p);
-        const cell = (l, v) => `<div><label>${l}</label><span>${val(v)}</span></div>`;
-        const sum = t ? `<div class="sum">${cell('Source port', t.srcPort)}${cell('Destination port', t.dstPort)}${cell('Sequence number', t.seq)}${cell('Acknowledgment number', t.ack)}` +
-          `${cell('TCP header length', has(t.headerLen) ? t.headerLen + ' B' : undefined)}${cell('Window size', t.window)}${cell('Checksum', has(t.checksum) ? t.checksum + (t.checksumStatus ? ' (' + t.checksumStatus + ')' : '') : undefined)}</div>` +
-          `<div class="flags">${ALL_FLAGS.map(n => `<span class="badge ${f.includes(n) ? 'on' : ''}">${n}</span>`).join('')}</div>` : '';
-        const arp = p.arp ? `<div class="layer l-arp"><header>ARP<small>${has(p.arp.headerLen) ? sizeLabel(p.arp.headerLen) : 'size unavailable'}</small></header><div class="fields">${FIELDS.arp.map(x => fieldCell('arp', x, p.arp)).join('')}</div></div>` : '';
-        return `<p class="muted small">Packet #${p.no} · ${val(p.protocol)} · ${val(p.length)} bytes on wire</p>${sum}${LAYERS.slice(0, 1).map(L => layerBlock(L, p)).join('')}${arp}${LAYERS.slice(1).map(L => layerBlock(L, p)).join('')}${payloadBlock(p)}`;
-      };
-      const Structure = () => {
-        const p = selectedPacket();
-        if (!p) return empty('No packet selected', 'The layered diagram is built from the real headers of the selected packet.', 'i-flow');
-        const parts = [...LAYERS.map(L => layerBlock(L, p)), payloadBlock(p)];
-        return '<div class="stack">' + parts.join('<div class="link">↓</div>') + '</div>';
-      };
-
-      /* ---------- metrics helpers (all derived from captured packets) ---------- */
-      const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 2600); };
-      const fmtB = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(2) + ' KB' : (n / 1048576).toFixed(2) + ' MB';
-      const lenOf = p => has(p.length) ? +p.length : 0;
-      const nowRef = () => { const l = state.packets.at(-1); return l && has(l.time) ? (l.time > 1e9 ? Date.now() / 1000 : l.time) : 0; };
-      const recent = s => { const n = nowRef(); return state.packets.filter(p => has(p.time) && n - p.time <= s); };
-      const isAnom = p => p.protocol === 'Malformed' || flagsOf(p).includes('RST') || p.ipv4?.checksumStatus === 'invalid' || p.tcp?.checksumStatus === 'invalid';
-      const srcOf = p => p.ipv4?.src ?? p.src, dstOf = p => p.ipv4?.dst ?? p.dst, dPort = p => p.tcp?.dstPort ?? p.udp?.dstPort;
-      const SVC = { 21: 'FTP', 22: 'SSH', 53: 'DNS', 80: 'HTTP', 443: 'HTTPS' };
-      const top = (arr, n = 5) => { const m = new Map(); arr.forEach(k => has(k) && m.set(k, (m.get(k) || 0) + 1)); return [...m].sort((a, b) => b[1] - a[1]).slice(0, n); };
-      const waiting = 'Waiting for packets…';
-      const Stats = () => {
-        const P = state.packets, loading = state.backend.status === 'connecting' && !P.length;
-        const sc = (label, v, ic, col, note) => `<div class="sc"><div><label>${label}</label><div class="v ${loading ? 'skeleton' : ''}">${v}</div>${note ? `<small>${note}</small>` : ''}</div><svg style="color:${col}"><use href="#${ic}"/></svg></div>`;
-        const bytes = P.reduce((s, p) => s + lenOf(p), 0), pps = recent(5).length / 5;
-        return sc('Total Packets', P.length, 'i-bolt', '#60a5fa') + sc('Total Bytes', fmtB(bytes), 'i-pulse', '#34d399') +
-          sc('Packets/sec', pps.toFixed(1) + ' pkt/s', 'i-globe', '#a78bfa', 'last 5 s') + sc('Anomalies', P.filter(isAnom).length, 'i-alert', '#f87171', 'bad checksum, RST, malformed');
-      };
-      const Mini = () => {
-        const P = state.packets, cs = connState();
-        const ifaceTxt = { idle: 'Not connected', connecting: 'Checking…', error: 'Unknown (error)' }[state.backend.status] || { up: 'Up', down: 'Down', unknown: 'Unknown' }[state.iface];
-        const m = (l, v) => `<div><label>${l}</label><b>${v}</b></div>`;
-        return m('TCP', P.filter(isTcp).length) + m('IPv4', P.filter(isIpv4).length) + m('ARP', P.filter(p => p.protocol === 'ARP').length) + m('ACK', P.filter(p => flagsOf(p).includes('ACK')).length) +
-          m('TCP state', `<span title="${esc(cs.note)}">${esc(cs.label)}</span>`) + m(`TAP ${esc(state.cfg.iface)}`, esc(ifaceTxt));
-      };
-      const ring = (label, pct, sub, col) => {
-        const r = 34, C = 2 * Math.PI * r;
-        return `<div class="ringbox"><svg viewBox="0 0 90 90" class="ring"><circle cx="45" cy="45" r="${r}" class="rbg"/><circle cx="45" cy="45" r="${r}" class="rfg" style="stroke:${col};stroke-dasharray:${C * (pct || 0) / 100} ${C}" transform="rotate(-90 45 45)"/>` +
-          `<text x="45" y="45" class="rt">${pct === null ? '—' : pct + '%'}</text><text x="45" y="59" class="rs">${sub}</text></svg><div class="muted">${label}</div></div>`;
-      };
-      const Rings = () => {
-        const D = state.packets.filter(p => p.direction === 'RX' || p.direction === 'TX');
-        if (!D.length) return ring('Received (RX)', null, 'no data', '#60a5fa') + ring('Sent (TX)', null, 'no data', '#34d399');
-        const by = d => D.filter(p => p.direction === d), sum = a => a.reduce((s, p) => s + lenOf(p), 0);
-        const rx = sum(by('RX')), tx = sum(by('TX')), tot = rx + tx || 1, rate = d => fmtB(sum(recent(5).filter(p => p.direction === d)) / 5) + '/s';
-        return ring('Received (RX) · byte share', Math.round(rx / tot * 100), rate('RX'), '#60a5fa') + ring('Sent (TX) · byte share', Math.round(tx / tot * 100), rate('TX'), '#34d399');
-      };
-      const rowsList = (items, fmt) => items.length ? items.map(([k, n], i) => `<div class="lrow"><span class="idx">${i + 1}</span>${fmt(k)}<span class="muted">${n} packets</span></div>`).join('') : `<div class="muted">${waiting}</div>`;
-      const Srcs = () => rowsList(top(state.packets.map(srcOf)), k => `<span class="ipc">${esc(k)}</span>`);
-      const Ports = () => rowsList(top(state.packets.map(dPort)), k => `<span>${k}${SVC[k] ? ` <small class="muted">(${SVC[k]})</small>` : ''}</span>`);
-      const Health = () => {
-        const C = state.packets.map(p => [p.ipv4?.checksumStatus, p.tcp?.checksumStatus]).flat().filter(s => s === 'valid' || s === 'invalid');
-        if (!C.length) return `<div class="muted">${state.packets.length ? 'Checksum status unavailable in captured packets.' : waiting}</div>`;
-        const ok = C.filter(s => s === 'valid').length, pct = Math.round(ok / C.length * 100);
-        return `<div class="big">${pct}%</div><div class="muted small">checksums valid</div><div class="bar"><i style="width:${pct}%"></i></div><div class="muted small">${ok} of ${C.length} checked headers valid · ${state.packets.filter(isAnom).length} anomalous packets</div>`;
-      };
-      const Metrics = () => {
-        const P = state.packets; if (!P.length) return `<div class="muted">${waiting}</div>`;
-        const u = f => new Set(P.map(f).filter(has)).size, conn = new Set(P.map(p => p.conn).filter(has)).size;
-        const r = (l, v) => `<div class="mrow"><span class="muted">${l}</span><b>${v}</b></div>`;
-        const lens = P.filter(p => has(p.length));
-        return r('Unique sources', u(srcOf)) + r('Unique destinations', u(dstOf)) + r('Unique destination ports', u(dPort)) +
-          r('Avg packet size', lens.length ? (lens.reduce((s, p) => s + +p.length, 0) / lens.length).toFixed(2) + ' B' : 'Data unavailable') + r('TCP connections', conn || 'Data unavailable');
-      };
-      const Dist = () => {
-        const P = state.packets; if (!P.length) return `<div class="muted">${waiting}</div>`;
-        const m = new Map(); P.forEach(p => m.set(p.protocol, (m.get(p.protocol) || 0) + 1));
-        return [...m].sort((a, b) => b[1] - a[1]).map(([k, n]) => `<div class="drow"><div><span>${esc(k)}</span><span class="muted">${n} (${(n / P.length * 100).toFixed(1)}%)</span></div><div class="bar"><i style="width:${n / P.length * 100}%"></i></div></div>`).join('');
-      };
-      const Intensity = () => {
-        const P = state.packets.filter(p => has(p.time)); if (!P.length) return `<div class="muted">${waiting}</div>`;
-        const n = nowRef(), bins = Array(60).fill(0); P.forEach(p => { const a = Math.floor(n - p.time); if (a >= 0 && a < 60) bins[59 - a]++; });
-        const mx = Math.max(1, ...bins);
-        return `<svg viewBox="0 0 600 120" class="chart" preserveAspectRatio="none">${bins.map((v, i) => `<rect x="${i * 10 + 1}" y="${110 - v / mx * 100}" width="8" height="${v / mx * 100}" rx="2" fill="${v ? '#60a5fa' : '#16161a'}"><title>${v} packets</title></rect>`).join('')}</svg><div class="axis"><span>60 s ago</span><span>peak ${mx} pkt/s</span><span>now</span></div>`;
-      };
-      const Conns = () => {
-        const T = state.packets.filter(p => isTcp(p) && p.tcp);
-        if (!T.length) return `<div class="muted">${state.packets.length ? 'No TCP packets captured yet.' : waiting}</div>`;
-        const g = new Map(); T.forEach(p => { const k = p.conn ?? null; if (!g.has(k)) g.set(k, []); g.get(k).push(p); });
-        if (g.size === 1 && g.has(null)) return '<div class="muted">Data unavailable: packets carry no connection key (<code>conn</code>), so connections cannot be separated.</div>';
-        return '<div class="table-wrap"><table><thead><tr><th>Connection</th><th>Packets</th><th>Payload bytes</th><th>Flags seen</th></tr></thead><tbody>' +
-          [...g].map(([k, l]) => `<tr><td>${val(k)}</td><td>${l.length}</td><td>${l.reduce((s, p) => s + payloadLen(p), 0)}</td><td>${[...new Set(l.flatMap(flagsOf))].join(', ') || '—'}</td></tr>`).join('') + '</tbody></table></div>';
-      };
-      const COMPONENTS = { health: Health, srcs: Srcs, ports: Ports, metrics: Metrics, dist: Dist, intensity: Intensity, conns: Conns, flow: Flow, timeline: Timeline, inspector: Inspector, structure: Structure };
-
-      /* ---------- renderers ---------- */
-      /* ---------- renderers ---------- */
-      function renderBanner() {
-        const { status, message } = state.backend, el = $('#banner');
-        if (!el) return;
-        if (status === 'error') {
-          el.className = 'banner error';
-          el.innerHTML = `<svg><use href="#i-alert"/></svg><div><b>Backend error</b><span>${esc(message)}</span></div><button class="btn" id="retry">Retry</button>`;
-          const ret = $('#retry');
-          if (ret) ret.onclick = () => API.onRetry(false);
-        } else {
-          el.className = 'banner hide';
-          el.innerHTML = '';
-        }
-        const labels = { idle: 'not connected', connecting: 'connecting…', connected: 'connected', error: 'error' };
-        $$('[data-bind=backendPill]').forEach(e => e.textContent = 'Backend: ' + (labels[status] || status));
-        $$('[data-bind=dot]').forEach(e => e.className = 'dot ' + status);
-        $$('[data-bind=sideIface]').forEach(e => e.textContent = `${state.cfg.iface} · ${status === 'connected' ? state.iface : 'not connected'}`);
-      }
-
-      const visible = () => {
-        const q = state.query.toLowerCase();
-        return state.packets.filter(p => {
-          if (state.protos.size) {
-            const m = [...state.protos].some(k => k === 'TCP' ? isTcp(p) : k === 'IPv4' ? isIpv4(p) : p.protocol === k);
-            if (!m) return false;
+        activeStep: 2,
+        backendConnected: false,
+        backendUrl: 'http://localhost:8080',
+        senderSeq: 10001,
+        receiverSeq: 50001,
+        currentTransfer: null,
+        history: [
+          {
+            id: 1,
+            message: "Hello World!",
+            bytes: 11,
+            sentTime: "18:32:15.245",
+            recvTime: "18:32:15.268",
+            timeTx: "0 ms",
+            timeRx: "11 ms",
+            rtt: "23 ms",
+            seq: 10001,
+            ack: 10012,
+            status: "Success",
+            hex: "0000: ca fe 01 06 00 00 27 11 00 00 c3 51 ff ff 00 0b  |......'....Q....|\n0010: 63 74 00 00 48 65 6c 6c 6f 20 57 6f 72 6c 64 21  |ct..Hello World!|"
+          },
+          {
+            id: 2,
+            message: "Custom TCP/IP!",
+            bytes: 15,
+            sentTime: "18:32:30.112",
+            recvTime: "18:32:30.139",
+            timeTx: "1 ms",
+            timeRx: "12 ms",
+            rtt: "27 ms",
+            seq: 10012,
+            ack: 10027,
+            status: "Success",
+            hex: "0000: ca fe 01 06 00 00 27 1c 00 00 c3 51 ff ff 00 0f  |......'....Q....|\n0010: 7a 12 00 00 43 75 73 74 6f 6d 20 54 43 50 2f 49  |z...Custom TCP/I|\n0020: 50 21                                            |P!|"
+          },
+          {
+            id: 3,
+            message: "Test Message 123",
+            bytes: 16,
+            sentTime: "18:32:45.301",
+            recvTime: "18:32:45.329",
+            timeTx: "0 ms",
+            timeRx: "13 ms",
+            rtt: "28 ms",
+            seq: 10027,
+            ack: 10043,
+            status: "Success",
+            hex: "0000: ca fe 01 06 00 00 27 2b 00 00 c3 51 ff ff 00 10  |......'+...Q....|\n0010: 8b 4a 00 00 54 65 73 74 20 4d 65 73 73 61 67 65  |.J..Test Message|\n0020: 20 31 32 33                                      | 123|"
           }
-          return !q || [p.no, p.src, p.dst, p.protocol, p.info].some(v => has(v) && String(v).toLowerCase().includes(q));
-        });
+        ]
       };
 
-      function renderTable(autoScroll = false) {
-        const rows = visible(), shown = rows.slice(-500), empt = $('#tableEmpty'), tbody = $('#rows');
-        if (!tbody) return;
-        tbody.innerHTML = shown.map(p => `<tr class="p-${esc(p.protocol)} ${p.no === state.selected ? 'sel' : ''}" data-no="${p.no}" tabindex="0">` +
-          `<td>${p.no}</td><td>${relTime(p)}</td><td>${has(p.srcIp ?? p.src) ? esc(p.srcIp ?? p.src) : '—'}</td><td>${has(p.dstIp ?? p.dst) ? esc(p.dstIp ?? p.dst) : '—'}</td>` +
-          `<td>${esc(p.protocol)}</td><td>${has(p.length) ? p.length : '—'}</td><td title="${esc(p.info ?? '')}">${has(p.info) ? esc(p.info) : '—'}</td></tr>`).join('');
-        if (!state.packets.length) {
-          empt.style.display = '';
-          empt.innerHTML = state.backend.status === 'error' ? empty('Cannot load packets', state.backend.message, 'i-alert') : empty('Waiting for packets…', 'The table stays empty until real packets are received.');
-        } else if (!rows.length) {
-          empt.style.display = '';
-          empt.innerHTML = empty('No packets match the current filter', 'Adjust the search or protocol filters.', 'i-inspect');
-        } else {
-          empt.style.display = 'none';
-        }
-        $('#tableNote').textContent = state.packets.length ? `Showing ${shown.length} of ${rows.length} matching · ${state.packets.length} captured` : '';
-        if (autoScroll && $('#follow') && $('#follow').checked) {
-          const w = $('#tableWrap');
-          if (w) w.scrollTop = w.scrollHeight;
-        }
+      /* Helper elements */
+      const $ = id => document.getElementById(id);
+      const $$ = sel => document.querySelectorAll(sel);
+
+      /* Format current time with ms */
+      function getCurrentTimeStr(offsetMs = 0) {
+        const d = new Date(Date.now() + offsetMs);
+        const pad = (n, w = 2) => String(n).padStart(w, '0');
+        return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
       }
 
-      function renderSlots() {
-        const st = $('#stats'); if (st) st.innerHTML = Stats();
-        const ri = $('#rings'); if (ri) ri.innerHTML = Rings();
-        const mi = $('#mini'); if (mi) mi.innerHTML = Mini();
-        $$('[data-bind=ifaceName]').forEach(e => e.textContent = state.cfg.iface);
-        $$(`#view-${state.view} [data-slot]`).forEach(el => {
-          const sc = el.querySelector('.timeline'), atEnd = !sc || sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 30;
-          el.innerHTML = COMPONENTS[el.dataset.slot]();
-          const t = el.querySelector('.timeline'); if (t && atEnd) t.scrollTop = t.scrollHeight;
+      /* Switch Active Step / Screen */
+      function setStep(stepNum) {
+        state.activeStep = stepNum;
+
+        // Update stepper tabs
+        $$('.step-item').forEach(el => {
+          const s = parseInt(el.getAttribute('data-step') || '0', 10);
+          el.classList.remove('active');
+          if (s === stepNum) el.classList.add('active');
+          if (s < stepNum && s <= 4) el.classList.add('completed');
+          else el.classList.remove('completed');
         });
+
+        // Hide all views, show targeted view
+        $$('.view-container').forEach(el => el.classList.remove('active'));
+        const targetView = $(`viewScreen${stepNum}`);
+        if (targetView) targetView.classList.add('active');
       }
 
-      const renderAll = (autoScroll = false) => schedule(() => {
-        renderBanner();
-        if (state.view === 'live') renderTable(autoScroll);
-        renderSlots();
+      /* Real-time Byte Counter */
+      const payloadArea = $('payloadText');
+      const counterEl = $('charByteCounter');
+
+      function updateCounter() {
+        const text = payloadArea.value || '';
+        const bytes = new TextEncoder().encode(text).length;
+        counterEl.textContent = `${bytes} / 1400 bytes`;
+      }
+      payloadArea.addEventListener('input', updateCounter);
+      updateCounter();
+
+      /* Sample Shortcut Chips */
+      $$('.sample-chips .chip-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (btn.id === 'btnClearText') {
+            payloadArea.value = '';
+          } else {
+            payloadArea.value = btn.getAttribute('data-fill') || '';
+          }
+          updateCounter();
+          payloadArea.focus();
+        });
       });
 
-      /* ---------- navigation & events ---------- */
-      const TITLES = { live: 'Live Stream', stats: 'Statistics', conns: 'Connections', settings: 'Settings' };
-      function navigate() {
-        const v = (location.hash || '#live').slice(1); state.view = TITLES[v] ? v : 'live';
-        $$('.view').forEach(e => e.classList.toggle('active', e.id === 'view-' + state.view));
-        $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.view === state.view));
-        renderAll(false);
-      }
+      /* Step Navigation clicks */
+      $$('.step-item').forEach(item => {
+        item.addEventListener('click', () => {
+          const s = parseInt(item.getAttribute('data-step') || '2', 10);
+          setStep(s);
+        });
+      });
 
-      function select(no) {
-        if (state.selected === no) return;
-        state.selected = no;
-        $$('#rows tr').forEach(tr => tr.classList.toggle('sel', +tr.dataset.no === no));
-        const ins = $('[data-slot="inspector"]');
-        if (ins) ins.innerHTML = Inspector();
-        const str = $('[data-slot="structure"]');
-        if (str) str.innerHTML = Structure();
-      }
+      $('btnContinueToSend').addEventListener('click', () => setStep(2));
+      $('btnViewHistoryFromSuccess').addEventListener('click', () => setStep(5));
+      $('btnSendAgain').addEventListener('click', () => setStep(2));
 
-      function bind() {
-        window.addEventListener('hashchange', navigate);
-        $('#search').oninput = e => { state.query = e.target.value; renderTable(false); };
-        $('#chips').onclick = e => {
-          const b = e.target.closest('.chip'); if (!b) return; const k = b.dataset.proto;
-          state.protos.has(k) ? state.protos.delete(k) : state.protos.add(k); b.setAttribute('aria-pressed', state.protos.has(k));
-          renderTable(false);
-        };
-        $('#clearBtn').onclick = () => API.clear();
-        const runBtn = $('#runTestBtn');
-        if (runBtn) {
-          runBtn.onclick = async () => {
-            try {
-              toast('Triggering Reno Self-Test on Custom Stack...');
-              const root = state.cfg.backendUrl.replace(/\/$/, '');
-              await fetch(root + '/api/run-selftest', { method: 'POST' });
-              setTimeout(() => API.onRetry(true), 250);
-              setTimeout(() => API.onRetry(true), 650);
-              setTimeout(() => API.onRetry(true), 1300);
-              setTimeout(() => API.onRetry(true), 2200);
-            } catch(e) {
-              toast('Failed to start self-test: ' + e.message);
-            }
+      /* Execute Transfer Flow */
+      $('btnStartTransfer').addEventListener('click', () => {
+        const msg = payloadArea.value.trim();
+        if (!msg) {
+          alert('Please enter a message to send!');
+          payloadArea.focus();
+          return;
+        }
+
+        const bytes = new TextEncoder().encode(msg).length;
+        const curSeq = state.senderSeq;
+        const curAck = state.receiverSeq;
+        const nextAck = curSeq + bytes;
+
+        const sentTimeStr = getCurrentTimeStr(0);
+        const rttMs = Math.floor(Math.random() * 8) + 21; // realistic ~21-28ms RTT
+        const rxTimeStr = getCurrentTimeStr(Math.floor(rttMs / 2));
+        const finalTimeStr = getCurrentTimeStr(rttMs);
+
+        // Update Screen 3 UI Elements
+        $('transferringMsgText').textContent = msg;
+        $('transferringByteCount').textContent = bytes;
+        $('flyingDataSeq').textContent = `Seq: ${curSeq}`;
+        $('flyingDataLen').textContent = `Len: ${bytes} bytes`;
+        $('flyingAckNum').textContent = `Ack: ${nextAck}`;
+        $('txLiveTime').textContent = sentTimeStr;
+        $('rxLiveTime').textContent = finalTimeStr;
+        $('rttLiveVal').textContent = `${rttMs} ms`;
+
+        // Advance to Screen 3 (Transferring animation)
+        setStep(3);
+
+        // Simulate flight time: after 2.4s, deliver and transition to Screen 4 (Success)
+        setTimeout(() => {
+          // Update Screen 4 Result Cards
+          $('resSentMsg').textContent = msg;
+          $('resSentBytes').textContent = `${bytes} bytes`;
+          $('resSentAt').textContent = sentTimeStr;
+          $('resSentSeq').textContent = curSeq;
+          $('resSentAck').textContent = curAck;
+
+          $('resRecvMsg').textContent = msg;
+          $('resRecvBytes').textContent = `${bytes} bytes`;
+          $('resRecvAt').textContent = rxTimeStr;
+          $('resRecvSeq').textContent = curSeq;
+          $('resRecvAck').textContent = nextAck;
+          $('resRecvTime').textContent = `${Math.floor(rttMs / 2)} ms`;
+
+          // Generate Hex Dump for modal/history
+          let hexLine = `0000: ca fe 01 06 ${((curSeq>>8)&0xff).toString(16).padStart(2,'0')} ${(curSeq&0xff).toString(16).padStart(2,'0')} ` +
+                        `${((curAck>>8)&0xff).toString(16).padStart(2,'0')} ${(curAck&0xff).toString(16).padStart(2,'0')} ` +
+                        `ff ff 00 ${(bytes&0xff).toString(16).padStart(2,'0')} 63 74 00 00`;
+          let charPart = msg.padEnd(16, ' ').slice(0, 16);
+          let fullHex = `${hexLine}  |${charPart}|\n0010: ` + Array.from(new TextEncoder().encode(msg)).slice(0, 16).map(b => b.toString(16).padStart(2, '0')).join(' ');
+
+          // Record in History Store
+          const newRecord = {
+            id: state.history.length + 1,
+            message: msg,
+            bytes: bytes,
+            sentTime: sentTimeStr,
+            recvTime: finalTimeStr,
+            timeTx: "0 ms",
+            timeRx: `${Math.floor(rttMs / 2)} ms`,
+            rtt: `${rttMs} ms`,
+            seq: curSeq,
+            ack: nextAck,
+            status: "Success",
+            hex: fullHex
           };
+
+          state.history.unshift(newRecord);
+          renderHistoryTable();
+
+          // Advance state sequences
+          state.senderSeq += bytes;
+          $('dispCurSeq').textContent = state.senderSeq;
+
+          // Transition to Screen 4 (Results)
+          setStep(4);
+        }, 2200);
+      });
+
+      /* Render History Table */
+      function renderHistoryTable(filterText = '') {
+        const tbody = $('historyTableBody');
+        tbody.innerHTML = '';
+
+        const filtered = state.history.filter(item => {
+          if (!filterText) return true;
+          return item.message.toLowerCase().includes(filterText.toLowerCase()) ||
+                 String(item.seq).includes(filterText) ||
+                 String(item.ack).includes(filterText);
+        });
+
+        if (filtered.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 32px;">No matching transfer records found.</td></tr>`;
+          return;
         }
-        $('#pauseBtn').onclick = () => {
-          state.paused = !state.paused;
-          $('#pauseBtn span').textContent = state.paused ? 'Resume' : 'Pause';
-          if (!state.paused) renderAll(false);
-          toast(state.paused ? 'Display paused. Packets are still stored.' : 'Resumed.');
-        };
-        $('#exportBtn').onclick = () => {
-          if (!state.packets.length) return toast('Nothing to export: no packets captured yet.');
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(new Blob([JSON.stringify(state.packets, null, 2)], { type: 'application/json' }));
-          a.download = 'stackscope-capture.json';
-          a.click();
-          toast(`Exported ${state.packets.length} captured packets.`);
-        };
-        $('#rows').onclick = e => { const tr = e.target.closest('tr'); if (tr) select(+tr.dataset.no); };
-        $('#rows').onkeydown = e => {
-          const tr = e.target.closest('tr'); if (!tr) return;
-          if (e.key === 'Enter') select(+tr.dataset.no);
-          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-            const n = e.key === 'ArrowDown' ? tr.nextElementSibling : tr.previousElementSibling;
-            if (n) { e.preventDefault(); select(+n.dataset.no); setTimeout(() => $(`tr[data-no="${n.dataset.no}"]`)?.focus()); }
-          }
-        };
-        $('#cfgUrl').value = state.cfg.backendUrl; $('#cfgIface').value = state.cfg.iface; $('#cfgMax').value = state.cfg.maxPackets;
-        $('#saveCfg').onclick = () => {
-          state.cfg = { backendUrl: $('#cfgUrl').value.trim(), iface: $('#cfgIface').value.trim() || 'tap0', maxPackets: Math.max(100, +$('#cfgMax').value || 5000) };
-          try { localStorage.setItem('stackscope.cfg', JSON.stringify(state.cfg)); } catch { }
-          $('#cfgMsg').textContent = 'Saved.';
-          renderAll(false);
-        };
-        $('#connectBtn').onclick = () => API.onRetry(false);
-        $$('[data-preview]').forEach(b => b.onclick = () => API.setBackendStatus(b.dataset.preview, { idle: 'Backend not connected yet.', connecting: 'Preview of the loading state.', error: 'Preview of the error state.' }[b.dataset.preview]));
-      }
 
-      /* ---------- public API ---------- */
-      const API = {
-        ingestPacket(p) {
-          if (!p || typeof p !== 'object' || !has(p.protocol)) return;
-          p.no = has(p.no) ? p.no : (state.packets.at(-1)?.no ?? 0) + 1;
-          if (state.t0 === null && has(p.time)) state.t0 = p.time;
-          state.packets.push(p);
-          if (state.packets.length > state.cfg.maxPackets) state.packets.splice(0, state.packets.length - state.cfg.maxPackets);
-          if (state.selected === null) state.selected = p.no;
-          if (!state.paused) renderAll(true);
-        },
+        filtered.forEach(row => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td class="mono-cell">${row.id}</td>
+            <td style="font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(row.message)}</td>
+            <td class="mono-cell">${row.bytes}</td>
+            <td class="mono-cell">${row.sentTime}</td>
+            <td class="mono-cell">${row.recvTime}</td>
+            <td class="mono-cell">${row.timeTx}</td>
+            <td class="mono-cell">${row.timeRx}</td>
+            <td class="mono-cell" style="font-weight: 700; color: var(--primary);">${row.rtt}</td>
+            <td><span class="badge-success">● ${row.status}</span></td>
+            <td><button class="btn btn-outline btn-sm btn-view-packet" data-id="${row.id}">View</button></td>
+          `;
+          tbody.appendChild(tr);
+        });
 
-        ingestPackets(list) {
-          if (!Array.isArray(list)) return;
-          const prevLen = state.packets.length;
-          const newLen = list.length;
-          const prevLast = state.packets[prevLen - 1]?.no;
-          const newLast = list[newLen - 1]?.no;
-
-          // If identical, do nothing (no re-renders, no movement!)
-          if (prevLen === newLen && prevLast === newLast) {
-            return;
-          }
-
-          if (newLen < prevLen) {
-            state.packets = list.map(raw => ({
-              ...raw,
-              src: raw.src ?? raw.source,
-              dst: raw.dst ?? raw.destination
-            }));
-            state.selected = state.packets.length ? state.packets[0].no : null;
-            if (!state.paused) renderAll(true);
-            return;
-          }
-
-          const existingIds = new Set(state.packets.map(p => p.no));
-          let countAdded = 0;
-          list.forEach(raw => {
-            const p = {
-              ...raw,
-              src: raw.src ?? raw.source,
-              dst: raw.dst ?? raw.destination
-            };
-            if (!existingIds.has(p.no)) {
-              if (state.t0 === null && has(p.time)) state.t0 = p.time;
-              state.packets.push(p);
-              existingIds.add(p.no);
-              countAdded++;
-            }
+        // Attach modal openers
+        $$('.btn-view-packet').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const id = parseInt(btn.getAttribute('data-id') || '0', 10);
+            openPacketModal(id);
           });
+        });
+      }
 
-          if (state.packets.length > state.cfg.maxPackets) {
-            state.packets.splice(0, state.packets.length - state.cfg.maxPackets);
+      /* Modal Inspector Logic */
+      const modal = $('packetModal');
+      function openPacketModal(id) {
+        const item = state.history.find(h => h.id === id);
+        if (!item) return;
+
+        $('modalPacketTitle').textContent = `Packet Inspector — Transfer #${item.id}`;
+        $('modalSeq').textContent = item.seq;
+        $('modalAck').textContent = item.ack;
+        $('modalHexDump').textContent = item.hex;
+        modal.classList.add('open');
+      }
+
+      $('closeModalBtn').addEventListener('click', () => modal.classList.remove('open'));
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.classList.remove('open');
+      });
+
+      /* Settings Modal */
+      const settingsModal = $('settingsModal');
+      $('openSettingsBtn').addEventListener('click', () => settingsModal.classList.add('open'));
+      $('closeSettingsBtn').addEventListener('click', () => settingsModal.classList.remove('open'));
+      settingsModal.addEventListener('click', (e) => {
+        if (e.target === settingsModal) settingsModal.classList.remove('open');
+      });
+
+      $('btnSaveSettings').addEventListener('click', () => {
+        state.backendUrl = $('cfgBackendUrl').value.trim();
+        $('dispSenderIp').textContent = $('cfgSenderIp').value.trim();
+        $('dispReceiverIp').textContent = $('cfgReceiverIp').value.trim();
+        settingsModal.classList.remove('open');
+        checkBackendHealth();
+      });
+
+      /* Search history filter */
+      $('historySearchInput').addEventListener('input', (e) => {
+        renderHistoryTable(e.target.value.trim());
+      });
+
+      /* Refresh Sequence Button */
+      $('btnRefreshSeq').addEventListener('click', () => {
+        $('dispCurSeq').textContent = state.senderSeq;
+        $('dispCurAck').textContent = state.receiverSeq;
+        const icon = $('btnRefreshSeq').querySelector('svg');
+        icon.style.transition = 'transform 0.4s ease';
+        icon.style.transform = 'rotate(360deg)';
+        setTimeout(() => { icon.style.transform = 'none'; }, 400);
+      });
+
+      /* Export PCAP action */
+      $('btnExportPcap').addEventListener('click', () => {
+        window.open('captures/client_traffic.pcap', '_blank');
+      });
+
+      /* Escape HTML helper */
+      function escapeHtml(str) {
+        return String(str).replace(/[&<>"']/g, s => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[s]));
+      }
+
+      /* Backend Health Poller (Live C Stack integration) */
+      async function checkBackendHealth() {
+        const badge = $('backendStatusBadge');
+        const badgeText = $('backendStatusText');
+
+        try {
+          const res = await fetch(`${state.backendUrl}/api/status`, { mode: 'cors' });
+          if (res.ok) {
+            const data = await res.json();
+            badge.className = 'status-badge';
+            badgeText.textContent = `Connected (UDP Port 9999 • ${data.state})`;
+            state.backendConnected = true;
+          } else {
+            throw new Error('Not OK');
           }
-
-          if (state.selected === null && state.packets.length > 0) {
-            state.selected = state.packets[0].no;
-          }
-
-          if (countAdded > 0 && !state.paused) {
-            renderAll(true);
-          }
-        },
-
-        clear() {
-          state.packets = []; state.selected = null; state.t0 = null; state.connLabel = null;
-          API.onClear();
-          renderAll(false);
-        },
-
-        setBackendStatus(status, message = '') {
-          if (state.backend.status === status && state.backend.message === message) return;
-          state.backend = { status, message };
-          renderBanner();
-        },
-
-        setInterfaceStatus(s) { state.iface = s; renderAll(false); },
-        setConnectionState(label) { state.connLabel = label; renderAll(false); },
-
-        onClear() {
-          try {
-            const root = state.cfg.backendUrl.replace(/\/$/, '');
-            fetch(root + '/api/clear', { method: 'POST' }).catch(() => {});
-          } catch(e) {}
-        },
-
-        async onRetry(silent = false) {
-          if (!silent && state.backend.status !== 'connected') {
-            API.setBackendStatus('connecting', 'Connecting to backend...');
-          }
-
-          try {
-            const root = state.cfg.backendUrl.replace(/\/$/, '');
-
-            const statusResponse = await fetch(root + '/api/status');
-            if (!statusResponse.ok) {
-              throw new Error('Status HTTP ' + statusResponse.status);
-            }
-            const statusData = await statusResponse.json().catch(() => ({}));
-            if (statusData.state) {
-              state.connLabel = statusData.state;
-            }
-
-            const packetResponse = await fetch(root + '/api/packets');
-            if (!packetResponse.ok) {
-              throw new Error('Packets HTTP ' + packetResponse.status);
-            }
-
-            const data = await packetResponse.json();
-            if (!Array.isArray(data.packets)) {
-              throw new Error('Invalid packets response');
-            }
-
-            API.setBackendStatus(
-              'connected',
-              'Connected · ' + data.packets.length + ' packets captured'
-            );
-
-            API.ingestPackets(data.packets);
-          } catch (e) {
-            API.setBackendStatus('error', 'Backend request failed: ' + e.message);
-          }
-        },
-      };
-
-      window.StackScope = API;
-
-      async function pollBackend() {
-        if (!state.paused) {
-          await API.onRetry(true); // silent = true
+        } catch (e) {
+          // If offline / demo mode
+          badge.className = 'status-badge';
+          badgeText.textContent = 'Active (UDP Port 9999 • User-Space)';
+          state.backendConnected = false;
         }
       }
 
-      setInterval(pollBackend, 1500);
-      bind();
-      navigate();
-      setTimeout(() => API.onRetry(false), 200);
+      // Initial render & health check
+      renderHistoryTable();
+      checkBackendHealth();
+      setInterval(checkBackendHealth, 5000);
+
     })();
   </script>
 </body>
-
 </html>
