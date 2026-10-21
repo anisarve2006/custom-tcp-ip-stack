@@ -7,3 +7,8 @@
 # Keep precompiled binaries for quick portability across laptops
 !*.exe
 !bin/*.exe
+
+# Frontend build & dependencies
+frontend/node_modules/
+frontend/dist/
+

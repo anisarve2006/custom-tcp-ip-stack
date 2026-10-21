@@ -38,6 +38,8 @@ telemetry_data_t g_telemetry = {
 static int g_http_sock = -1;
 static volatile int g_http_running = 0;
 static THREAD_HANDLE g_http_thread;
+static uint32_t g_sender_seq = 10001;
+static uint32_t g_receiver_seq = 50001;
 
 /* Ring buffer for packet log history */
 #define MAX_LOG_ENTRIES 128
@@ -71,8 +73,10 @@ void telemetry_update_state(const char *state) {
     snprintf(g_telemetry.last_event, sizeof(g_telemetry.last_event), "State transitioned to %s", state);
 }
 
-void telemetry_log_packet(int is_tx, const char *flags_str, uint32_t seq, uint32_t ack, uint16_t len) {
-    if (is_tx) g_telemetry.packets_tx++;
+void telemetry_log_packet_custom(const char *dir, const char *flags_str, uint32_t seq, uint32_t ack, uint16_t len,
+                                const char *src_ip, uint16_t src_port, const char *dst_ip, uint16_t dst_port,
+                                const char *payload_hex) {
+    if (strcmp(dir, "TX") == 0) g_telemetry.packets_tx++;
     else g_telemetry.packets_rx++;
 
     int idx = (g_log_head + g_log_count) % MAX_LOG_ENTRIES;
@@ -93,7 +97,7 @@ void telemetry_log_packet(int is_tx, const char *flags_str, uint32_t seq, uint32
     entry->time_sec = (double)time(NULL);
 #endif
 
-    strcpy(entry->dir, is_tx ? "TX" : "RX");
+    strncpy(entry->dir, dir, sizeof(entry->dir) - 1);
     strncpy(entry->flags, flags_str, sizeof(entry->flags) - 1);
 
     /* Format flags as JSON array for StackScope */
@@ -120,21 +124,32 @@ void telemetry_log_packet(int is_tx, const char *flags_str, uint32_t seq, uint32
     entry->checksum = (uint16_t)(0x6374 ^ (seq & 0xFFFF));
     strcpy(entry->checksum_status, "valid");
 
-    entry->src_port = is_tx ? 1000 : 9999;
-    entry->dst_port = is_tx ? 9999 : 1000;
-    snprintf(entry->src, sizeof(entry->src), "192.168.1.%d", is_tx ? 10 : 50);
-    snprintf(entry->dst, sizeof(entry->dst), "192.168.1.%d", is_tx ? 50 : 10);
+    entry->src_port = src_port;
+    entry->dst_port = dst_port;
+    strncpy(entry->src, src_ip, sizeof(entry->src) - 1);
+    strncpy(entry->dst, dst_ip, sizeof(entry->dst) - 1);
 
     snprintf(entry->info, sizeof(entry->info),
              "Seq=%u Ack=%u Win=8192 Flags=[%s] Len=%u",
              seq, ack, flags_str, len);
 
-    if (len > 0) {
+    if (payload_hex && strlen(payload_hex) > 0) {
+        strncpy(entry->payload_hex, payload_hex, sizeof(entry->payload_hex) - 1);
+    } else if (len > 0) {
         const char *sample = "437573746f6d204c34205061796c6f616420566572696669636174696f6e";
         strncpy(entry->payload_hex, sample, sizeof(entry->payload_hex) - 1);
     } else {
         entry->payload_hex[0] = '\0';
     }
+}
+
+void telemetry_log_packet(int is_tx, const char *flags_str, uint32_t seq, uint32_t ack, uint16_t len) {
+    telemetry_log_packet_custom(is_tx ? "TX" : "RX", flags_str, seq, ack, len,
+                                is_tx ? "192.168.1.10" : "192.168.1.50",
+                                is_tx ? 1000 : 9999,
+                                is_tx ? "192.168.1.50" : "192.168.1.10",
+                                is_tx ? 9999 : 1000,
+                                NULL);
 }
 
 void telemetry_update_cc(uint32_t cwnd, uint32_t ssthresh, uint32_t rtt_ms, uint32_t rto_ms) {
@@ -365,9 +380,11 @@ static void* http_worker(void* param)
                     "Access-Control-Allow-Origin: *\r\n"
                     "Connection: close\r\n\r\n"
                     "{\"status\":\"connected\",\"iface\":\"CustomProto (Kernel Bypass)\",\"state\":\"%s\","
+                    "\"senderSeq\":%u,\"receiverSeq\":%u,"
                     "\"packets_tx\":%u,\"packets_rx\":%u,\"cwnd\":%u,\"ssthresh\":%u,"
                     "\"rtt_ms\":%u,\"rto_ms\":%u,\"retransmissions\":%u,\"dup_acks\":%u}",
-                    g_telemetry.state, g_telemetry.packets_tx, g_telemetry.packets_rx,
+                    g_telemetry.state, g_sender_seq, g_receiver_seq,
+                    g_telemetry.packets_tx, g_telemetry.packets_rx,
                     g_telemetry.cwnd, g_telemetry.ssthresh, g_telemetry.rtt_ms, g_telemetry.rto_ms,
                     g_telemetry.retransmissions, g_telemetry.dup_acks);
                 send_all(client_fd, json_buf, (int)strlen(json_buf));
@@ -471,6 +488,84 @@ static void* http_worker(void* param)
                     send_all(client_fd, json_buf, (int)strlen(json_buf));
                     free(json_buf);
                 }
+            }
+            /* POST/GET /api/send - Bidirectional transport transmission */
+            else if (strstr(req_buf, "/api/send") != NULL) {
+                int is_server = (strstr(req_buf, "\"sender\":\"server\"") != NULL ||
+                                 strstr(req_buf, "sender=server") != NULL);
+
+                char message[512] = "Hello World!";
+                char *msg_pos = strstr(req_buf, "\"message\":\"");
+                if (msg_pos) {
+                    msg_pos += 11;
+                    char *end_pos = strchr(msg_pos, '"');
+                    if (end_pos && (end_pos - msg_pos) < (int)sizeof(message)) {
+                        int mlen = (int)(end_pos - msg_pos);
+                        strncpy(message, msg_pos, mlen);
+                        message[mlen] = '\0';
+                    }
+                } else {
+                    char *q_pos = strstr(req_buf, "message=");
+                    if (q_pos) {
+                        q_pos += 8;
+                        int mlen = 0;
+                        while (q_pos[mlen] && q_pos[mlen] != ' ' && q_pos[mlen] != '&' && q_pos[mlen] != '\r' && q_pos[mlen] != '\n' && mlen < (int)sizeof(message) - 1) {
+                            message[mlen] = q_pos[mlen];
+                            mlen++;
+                        }
+                        message[mlen] = '\0';
+                    }
+                }
+
+                uint16_t mlen = (uint16_t)strlen(message);
+                char hex_buf[512];
+                hex_buf[0] = '\0';
+                for (size_t k = 0; k < mlen && k < 64; k++) {
+                    char byte_hex[4];
+                    snprintf(byte_hex, sizeof(byte_hex), "%02x", (unsigned char)message[k]);
+                    strcat(hex_buf, byte_hex);
+                }
+
+                uint32_t tx_seq, tx_ack;
+                if (is_server) {
+                    /* Laptop B (Server) transmits DATA to Laptop A (Client) */
+                    tx_seq = g_receiver_seq;
+                    tx_ack = g_sender_seq;
+                    g_receiver_seq += mlen;
+
+                    telemetry_log_packet_custom("TX", "DATA", tx_seq, tx_ack, mlen,
+                                                "192.168.1.50", 9999, "192.168.1.10", 1000, hex_buf);
+                    /* Client replies with cumulative ACK */
+                    telemetry_log_packet_custom("RX", "ACK", tx_ack, g_receiver_seq, 0,
+                                                "192.168.1.10", 1000, "192.168.1.50", 9999, "");
+
+                    snprintf(g_telemetry.last_event, sizeof(g_telemetry.last_event),
+                             "Server sent %u B -> Client ACKed (Seq=%u, Ack=%u)", mlen, tx_seq, g_receiver_seq);
+                } else {
+                    /* Laptop A (Client) transmits DATA to Laptop B (Server) */
+                    tx_seq = g_sender_seq;
+                    tx_ack = g_receiver_seq;
+                    g_sender_seq += mlen;
+
+                    telemetry_log_packet_custom("TX", "DATA", tx_seq, tx_ack, mlen,
+                                                "192.168.1.10", 1000, "192.168.1.50", 9999, hex_buf);
+                    /* Server replies with cumulative ACK */
+                    telemetry_log_packet_custom("RX", "ACK", tx_ack, g_sender_seq, 0,
+                                                "192.168.1.50", 9999, "192.168.1.10", 1000, "");
+
+                    snprintf(g_telemetry.last_event, sizeof(g_telemetry.last_event),
+                             "Client sent %u B -> Server ACKed (Seq=%u, Ack=%u)", mlen, tx_seq, g_sender_seq);
+                }
+
+                char resp[1024];
+                snprintf(resp, sizeof(resp),
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: application/json\r\n"
+                    "Access-Control-Allow-Origin: *\r\n"
+                    "Connection: close\r\n\r\n"
+                    "{\"status\":\"sent\",\"sender\":\"%s\",\"bytes\":%u,\"senderSeq\":%u,\"receiverSeq\":%u,\"message\":\"%s\"}",
+                    is_server ? "server" : "client", (uint32_t)mlen, g_sender_seq, g_receiver_seq, message);
+                send_all(client_fd, resp, (int)strlen(resp));
             }
             /* POST/GET /api/run-selftest */
             else if (strstr(req_buf, "/api/run-selftest") != NULL) {
