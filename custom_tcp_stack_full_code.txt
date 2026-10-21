@@ -1,0 +1,3706 @@
+===== PROJECT FILE LIST =====
+src/tap.c
+src/tap_before_dashboard.c
+src/main.c
+src/tap_final_backup.c
+src/tap.c.backup
+
+===== FILE: src/main.c =====
+#include<stdio.h>
+
+int main(){
+printf("Custom TCP/IP Stack\n");
+printf("Project started successfully!\n");
+
+}
+
+
+
+===== FILE: src/tap.c =====
+#include <sys/select.h>
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/if_tun.h>
+#include <net/if.h>
+#include <time.h>
+
+unsigned int tcp_sequence_number = 1;
+unsigned int tcp_ack_number = 0;
+unsigned int tcp_expected_client_sequence = 0;
+
+time_t syn_sent_time;
+unsigned char syn_request[2000];
+int syn_request_length = 0;
+int syn_ack_retries = 0;
+double rtt = 0.0;
+double rto = 3.0;
+
+/* TCP connection states */
+
+#define TCP_CLOSED       0
+#define TCP_LISTEN       1
+#define TCP_SYN_RECEIVED 2
+#define TCP_ESTABLISHED  3
+#define TCP_CLOSE_WAIT   4
+#define TCP_LAST_ACK     5
+
+int tcp_state = TCP_CLOSED;
+
+
+/* Log metadata from real Ethernet frames for StackScope */
+void log_stackscope_packet(const unsigned char *buffer, int n)
+{
+    if (n < 14)
+        return;
+
+    unsigned short ethertype =
+        ((unsigned short)buffer[12] << 8) | buffer[13];
+printf("DEBUG EtherType=0x%04X, frame length=%d\n", ethertype, n);
+    const char *protocol = "OTHER";
+    char source[32] = "-";
+    char destination[32] = "-";
+    char info[128] = "Ethernet frame";
+
+    unsigned int source_port = 0, destination_port = 0;
+    unsigned int seq = 0, ack = 0;
+    unsigned int flags = 0, ttl = 0, version = 0;
+    unsigned int ip_header_length = 0, tcp_header_length = 0;
+    unsigned int payload_length = 0;
+
+    if (ethertype == 0x0806 && n >= 42)
+    {
+        protocol = "ARP";
+
+        snprintf(source, sizeof(source), "%u.%u.%u.%u",
+            buffer[28], buffer[29], buffer[30], buffer[31]);
+
+        snprintf(destination, sizeof(destination), "%u.%u.%u.%u",
+            buffer[38], buffer[39], buffer[40], buffer[41]);
+
+        unsigned int operation = ((unsigned int)buffer[20] << 8) |
+                                  buffer[21];
+
+        snprintf(info, sizeof(info), "ARP %s",
+                 operation == 1 ? "Request" :
+                 operation == 2 ? "Reply" : "Other");
+    }
+    else if (ethertype == 0x0800 && n >= 34)
+    {
+        int ihl = (buffer[14] & 0x0F) * 4;
+
+        if (ihl < 20 || n < 14 + ihl)
+            return;
+
+        version = buffer[14] >> 4;
+        ip_header_length = ihl;
+        ttl = buffer[22];
+
+        unsigned int total_length =
+            ((unsigned int)buffer[16] << 8) | buffer[17];
+
+        unsigned int ip_protocol = buffer[23];
+
+        snprintf(source, sizeof(source), "%u.%u.%u.%u",
+            buffer[26], buffer[27], buffer[28], buffer[29]);
+
+        snprintf(destination, sizeof(destination), "%u.%u.%u.%u",
+            buffer[30], buffer[31], buffer[32], buffer[33]);
+
+        if (ip_protocol == 6)
+            protocol = "TCP";
+        else if (ip_protocol == 17)
+            protocol = "UDP";
+        else if (ip_protocol == 1)
+            protocol = "ICMP";
+        else
+            protocol = "IPv4";
+
+        if (ip_protocol == 6 && n >= 14 + ihl + 20)
+        {
+            int t = 14 + ihl;
+
+            source_port = ((unsigned int)buffer[t] << 8) |
+                           buffer[t + 1];
+            destination_port = ((unsigned int)buffer[t + 2] << 8) |
+                                buffer[t + 3];
+
+            seq = ((unsigned int)buffer[t + 4] << 24) |
+                  ((unsigned int)buffer[t + 5] << 16) |
+                  ((unsigned int)buffer[t + 6] << 8) |
+                  buffer[t + 7];
+
+            ack = ((unsigned int)buffer[t + 8] << 24) |
+                  ((unsigned int)buffer[t + 9] << 16) |
+                  ((unsigned int)buffer[t + 10] << 8) |
+                  buffer[t + 11];
+
+            tcp_header_length = ((buffer[t + 12] >> 4) & 0x0F) * 4;
+            flags = buffer[t + 13];
+
+            if (tcp_header_length >= 20 &&
+                total_length >= ihl + tcp_header_length)
+            {
+                payload_length = total_length - ihl - tcp_header_length;
+            }
+
+            snprintf(info, sizeof(info), "TCP %u -> %u flags=0x%02X",
+                     source_port, destination_port, flags);
+        }
+        else if (ip_protocol == 17 && n >= 14 + ihl + 8)
+        {
+            int u = 14 + ihl;
+            source_port = ((unsigned int)buffer[u] << 8) | buffer[u + 1];
+            destination_port = ((unsigned int)buffer[u + 2] << 8) |
+                                buffer[u + 3];
+
+            snprintf(info, sizeof(info), "UDP %u -> %u",
+                     source_port, destination_port);
+        }
+        else
+        {
+            snprintf(info, sizeof(info), "%s packet", protocol);
+        }
+    }
+
+    FILE *log = fopen("/tmp/stackscope_packets.jsonl", "a");
+    if (!log)
+    {
+        perror("StackScope packet log");
+        return;
+    }
+
+    time_t now = time(NULL);
+
+    fprintf(log,
+        "{\"time\":%lld,\"source\":\"%s\",\"destination\":\"%s\","
+        "\"protocol\":\"%s\",\"length\":%d,\"info\":\"%s\","
+        "\"source_port\":%u,\"destination_port\":%u,"
+        "\"sequence_number\":%u,\"acknowledgment_number\":%u,"
+        "\"flags\":%u,\"ttl\":%u,\"version\":%u,"
+        "\"ip_header_length\":%u,\"tcp_header_length\":%u,"
+        "\"payload_length\":%u}\n",
+        (long long)now, source, destination, protocol, n, info,
+        source_port, destination_port, seq, ack, flags, ttl, version,
+        ip_header_length, tcp_header_length, payload_length);
+
+    fclose(log);
+}
+
+
+/* Calculate Internet checksum */
+
+unsigned short calculate_checksum(unsigned char *data, int length)
+{
+    unsigned long sum = 0;
+
+    for (int i = 0; i < length; i += 2)
+    {
+        unsigned short word =
+            ((unsigned short)data[i] << 8) | data[i + 1];
+
+        sum += word;
+    }
+
+    while (sum >> 16)
+    {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    return (unsigned short)(~sum);
+}
+
+
+/* Calculate TCP checksum */
+
+unsigned short calculate_tcp_checksum(
+    unsigned char *src_ip,
+    unsigned char *dst_ip,
+    unsigned char *tcp,
+    int tcp_length)
+{
+    unsigned long sum = 0;
+
+    /* Source IP */
+
+    sum += ((unsigned short)src_ip[0] << 8) | src_ip[1];
+    sum += ((unsigned short)src_ip[2] << 8) | src_ip[3];
+
+    /* Destination IP */
+
+    sum += ((unsigned short)dst_ip[0] << 8) | dst_ip[1];
+    sum += ((unsigned short)dst_ip[2] << 8) | dst_ip[3];
+
+    /* Protocol = TCP */
+
+    sum += 6;
+
+    /* TCP length */
+
+    sum += tcp_length;
+
+    /* TCP header */
+
+    for (int i = 0; i < tcp_length; i += 2)
+    {
+        unsigned short word =
+            ((unsigned short)tcp[i] << 8) | tcp[i + 1];
+
+        sum += word;
+    }
+
+    /* Fold carries */
+
+    while (sum >> 16)
+    {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    return (unsigned short)(~sum);
+}
+
+void send_tcp_ack(
+    int fd,
+    unsigned char *request,
+    unsigned int acknowledgment_number)
+{
+    unsigned char reply[54];
+
+    memset(reply, 0, sizeof(reply));
+/* Ethernet header */
+
+/* Destination MAC = client's MAC */
+memcpy(reply, request + 6, 6);
+
+/* Source MAC = our TAP MAC */
+unsigned char our_mac[6] = {
+    0x42, 0x1e, 0xe8, 0xf2, 0xe7, 0xee
+};
+memcpy(reply + 6, our_mac, 6);
+
+/* EtherType = IPv4 */
+reply[12] = 0x08;
+reply[13] = 0x00;
+    /* IPv4 header */
+
+    reply[14] = 0x45;
+    reply[15] = 0x00;
+
+    reply[16] = 0x00;
+    reply[17] = 0x28;
+
+    reply[18] = 0x00;
+    reply[19] = 0x00;
+
+    reply[20] = 0x40;
+    reply[21] = 0x00;
+
+    reply[22] = 64;
+    reply[23] = 6;
+
+    /* Source IP = 10.123.45.2 */
+
+    reply[26] = 10;
+    reply[27] = 123;
+    reply[28] = 45;
+    reply[29] = 2;
+
+    /* Destination IP = request source IP */
+
+    memcpy(reply + 30, request + 26, 4);
+
+    /* IPv4 checksum */
+
+    reply[24] = 0;
+    reply[25] = 0;
+
+    unsigned short ip_checksum =
+        calculate_checksum(reply + 14, 20);
+
+    reply[24] = ip_checksum >> 8;
+    reply[25] = ip_checksum & 0xFF;
+
+    /* TCP source port = request destination port */
+
+    reply[34] = request[36];
+    reply[35] = request[37];
+
+    /* TCP destination port = request source port */
+
+    reply[36] = request[34];
+    reply[37] = request[35];
+
+    /* Sequence number */
+
+reply[38] = (tcp_sequence_number >> 24) & 0xFF;
+reply[39] = (tcp_sequence_number >> 16) & 0xFF;
+reply[40] = (tcp_sequence_number >> 8) & 0xFF;
+reply[41] = tcp_sequence_number & 0xFF;
+
+    /* Acknowledgment number */
+
+    reply[42] = (acknowledgment_number >> 24) & 0xFF;
+    reply[43] = (acknowledgment_number >> 16) & 0xFF;
+    reply[44] = (acknowledgment_number >> 8) & 0xFF;
+    reply[45] = acknowledgment_number & 0xFF;
+
+    /* TCP header length = 20 bytes */
+
+    reply[46] = 0x50;
+
+    /* ACK flag */
+
+    reply[47] = 0x10;
+
+    /* Window size */
+
+    reply[48] = 0xFA;
+    reply[49] = 0xF0;
+
+    /* TCP checksum */
+
+    reply[50] = 0;
+    reply[51] = 0;
+
+    unsigned short tcp_checksum =
+        calculate_tcp_checksum(
+            reply + 26,
+            reply + 30,
+            reply + 34,
+            20
+        );
+
+    reply[50] = tcp_checksum >> 8;
+    reply[51] = tcp_checksum & 0xFF;
+
+    /* Send ACK */
+
+    if (write(fd, reply, 54) < 0)
+    {
+        perror("TCP ACK send failed");
+    }
+    else
+    {
+        printf("TCP ACK sent!\n");
+    }
+}
+void send_tcp_fin_ack(
+    int fd,
+    unsigned char *request,
+    unsigned int acknowledgment_number)
+{
+    unsigned char reply[54];
+
+    memset(reply, 0, sizeof(reply));
+
+    /* Ethernet header */
+
+    memcpy(reply, request + 6, 6);
+    memcpy(reply + 6, request, 6);
+
+    reply[12] = 0x08;
+    reply[13] = 0x00;
+
+    /* IPv4 header */
+
+    reply[14] = 0x45;
+    reply[15] = 0x00;
+
+    reply[16] = 0x00;
+    reply[17] = 0x28;
+
+    reply[18] = 0x00;
+    reply[19] = 0x00;
+
+    reply[20] = 0x40;
+    reply[21] = 0x00;
+
+    reply[22] = 64;
+    reply[23] = 6;
+
+    /* Source IP */
+
+    reply[26] = 10;
+    reply[27] = 123;
+    reply[28] = 45;
+    reply[29] = 2;
+
+    /* Destination IP */
+
+    memcpy(reply + 30, request + 26, 4);
+
+    /* IPv4 checksum */
+
+    reply[24] = 0;
+    reply[25] = 0;
+
+    unsigned short ip_checksum =
+        calculate_checksum(reply + 14, 20);
+
+    reply[24] = ip_checksum >> 8;
+    reply[25] = ip_checksum & 0xFF;
+
+    /* TCP source port */
+
+    reply[34] = request[36];
+    reply[35] = request[37];
+
+    /* TCP destination port */
+
+    reply[36] = request[34];
+    reply[37] = request[35];
+
+    /* Sequence number */
+
+    reply[38] = (tcp_sequence_number >> 24) & 0xFF;
+    reply[39] = (tcp_sequence_number >> 16) & 0xFF;
+    reply[40] = (tcp_sequence_number >> 8) & 0xFF;
+    reply[41] = tcp_sequence_number & 0xFF;
+
+    /* Acknowledgment number */
+
+    reply[42] = (acknowledgment_number >> 24) & 0xFF;
+    reply[43] = (acknowledgment_number >> 16) & 0xFF;
+    reply[44] = (acknowledgment_number >> 8) & 0xFF;
+    reply[45] = acknowledgment_number & 0xFF;
+
+    /* TCP header length = 20 bytes */
+
+    reply[46] = 0x50;
+
+    /* FIN + ACK flags */
+
+    reply[47] = 0x11;
+
+    /* Window size */
+
+    reply[48] = 0xFA;
+    reply[49] = 0xF0;
+
+    /* TCP checksum */
+
+    reply[50] = 0;
+    reply[51] = 0;
+
+    unsigned short tcp_checksum =
+        calculate_tcp_checksum(
+            reply + 26,
+            reply + 30,
+            reply + 34,
+            20
+        );
+
+    reply[50] = tcp_checksum >> 8;
+    reply[51] = tcp_checksum & 0xFF;
+
+    /* Send FIN + ACK */
+
+    if (write(fd, reply, 54) < 0)
+    {
+        perror("TCP FIN-ACK send failed");
+    }
+    else
+    {
+        printf("TCP FIN-ACK sent!\n");
+    }
+}
+
+/* Send TCP SYN-ACK */
+
+void send_tcp_syn_ack(int fd, unsigned char *request)
+{
+    unsigned char reply[54];
+
+    /* Ethernet header */
+
+    memcpy(reply, request + 6, 6);
+
+    reply[12] = 0x08;
+    reply[13] = 0x00;
+
+    /* IPv4 header */
+
+    reply[14] = 0x45;
+    reply[15] = 0x00;
+
+    /* Total length = 40 bytes */
+
+    reply[16] = 0x00;
+    reply[17] = 0x28;
+
+    /* Identification */
+
+    reply[18] = 0x00;
+    reply[19] = 0x00;
+
+    /* Flags and fragment offset */
+
+    reply[20] = 0x40;
+    reply[21] = 0x00;
+
+    /* TTL */
+
+    reply[22] = 64;
+
+    /* Protocol = TCP */
+
+    reply[23] = 6;
+
+    /* IPv4 checksum initially zero */
+
+    reply[24] = 0x00;
+    reply[25] = 0x00;
+
+    /* Source IP = 10.123.45.2 */
+
+    reply[26] = 10;
+    reply[27] = 123;
+    reply[28] = 45;
+    reply[29] = 2;
+
+    /* Destination IP = client's IP */
+
+    memcpy(reply + 30, request + 26, 4);
+
+    /* Calculate IPv4 checksum */
+
+    unsigned short ip_checksum =
+        calculate_checksum(reply + 14, 20);
+
+    reply[24] = ip_checksum >> 8;
+    reply[25] = ip_checksum & 0xFF;
+
+    /* TCP header */
+
+    unsigned char *tcp = reply + 34;
+
+    /* Source port = client's destination port */
+
+    tcp[0] = request[36];
+    tcp[1] = request[37];
+
+    /* Destination port = client's source port */
+
+    tcp[2] = request[34];
+    tcp[3] = request[35];
+
+    /* Sequence number */
+
+    tcp[4] = 0x00;
+    tcp[5] = 0x00;
+    tcp[6] = 0x00;
+    tcp[7] = 0x01;
+
+    /* Get client's sequence number */
+
+    unsigned int client_seq =
+        ((unsigned int)request[38] << 24) |
+        ((unsigned int)request[39] << 16) |
+        ((unsigned int)request[40] << 8) |
+        request[41];
+
+    /* ACK number = client sequence + 1 */
+
+    unsigned int ack_number = client_seq + 1;
+
+    tcp[8] = ack_number >> 24;
+    tcp[9] = ack_number >> 16;
+    tcp[10] = ack_number >> 8;
+    tcp[11] = ack_number;
+
+    /* TCP header length = 20 bytes */
+
+    tcp[12] = 0x50;
+
+    /* SYN + ACK */
+
+    tcp[13] = 0x12;
+
+    /* Window size */
+
+    tcp[14] = 0xFA;
+    tcp[15] = 0xF0;
+
+    /* TCP checksum initially zero */
+
+    tcp[16] = 0x00;
+    tcp[17] = 0x00;
+
+    /* Urgent pointer */
+
+    tcp[18] = 0x00;
+    tcp[19] = 0x00;
+
+    /* TCP checksum */
+
+    unsigned char src_ip[4] = {10, 123, 45, 2};
+    unsigned char dst_ip[4];
+
+    memcpy(dst_ip, request + 26, 4);
+
+    unsigned short tcp_checksum =
+        calculate_tcp_checksum(
+            src_ip,
+            dst_ip,
+            tcp,
+            20
+        );
+
+    tcp[16] = tcp_checksum >> 8;
+    tcp[17] = tcp_checksum & 0xFF;
+
+    printf("\nSending TCP SYN-ACK...\n");
+
+    if (write(fd, reply, 54) < 0)
+    {
+        perror("Error sending TCP SYN-ACK");
+    }
+    else
+    {
+        printf("TCP SYN-ACK sent!\n");
+    }
+}
+
+
+/* Send ARP reply */
+
+void send_arp_reply(int fd, unsigned char *request)
+{
+    unsigned char reply[42];
+
+    unsigned char our_ip[4] = {10, 123, 45, 2};
+
+    /* Ethernet header */
+
+    memcpy(reply, request + 6, 6);
+    memcpy(reply + 6, request + 6, 6);
+
+    reply[12] = 0x08;
+    reply[13] = 0x06;
+
+    /* ARP header */
+
+    reply[14] = 0x00;
+    reply[15] = 0x01;
+
+    reply[16] = 0x08;
+    reply[17] = 0x00;
+
+    reply[18] = 6;
+    reply[19] = 4;
+
+    /* ARP reply */
+
+    reply[20] = 0x00;
+    reply[21] = 0x02;
+
+    /* Sender MAC */
+
+    memcpy(reply + 22, request + 6, 6);
+
+    /* Sender IP */
+
+    memcpy(reply + 28, our_ip, 4);
+
+    /* Target MAC */
+
+    memcpy(reply + 32, request + 6, 6);
+
+    /* Target IP */
+
+    memcpy(reply + 38, request + 28, 4);
+
+    if (write(fd, reply, 42) < 0)
+    {
+        perror("Error sending ARP reply");
+    }
+    else
+    {
+        printf("ARP Reply sent!\n");
+    }
+}
+
+
+/* Main */
+
+int main()
+{
+    int fd;
+
+    struct ifreq ifr;
+
+    char buffer[2000];
+
+    /* Open TAP device */
+
+    fd = open("/dev/net/tun", O_RDWR);
+
+    if (fd < 0)
+    {
+        perror("Error opening /dev/net/tun");
+        return 1;
+    }
+
+    /* Configure TAP */
+
+    memset(&ifr, 0, sizeof(ifr));
+
+    ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
+
+    strncpy(ifr.ifr_name, "tap0", IFNAMSIZ);
+
+    if (ioctl(fd, TUNSETIFF, (void *)&ifr) < 0)
+    {
+        perror("Error creating TAP interface");
+        close(fd);
+        return 1;
+    }
+    tcp_state = TCP_LISTEN;
+
+    printf("TCP state: LISTEN\n");
+    printf("TAP interface created: %s\n", ifr.ifr_name);
+    printf("Waiting for Ethernet frames...\n");
+
+    /* Read packets continuously */
+
+
+while (1)
+{
+    fd_set readfds;
+    struct timeval timeout;
+
+    FD_ZERO(&readfds);
+    FD_SET(fd, &readfds);
+
+    timeout.tv_sec = 1;
+    timeout.tv_usec = 0;
+
+    int ready = select(fd + 1, &readfds, NULL, NULL, &timeout);
+
+    if (ready < 0)
+    {
+        perror("select failed");
+        break;
+    }
+
+    if (ready == 0)
+    {
+        /* No packet received - check retransmission timer */
+
+        if (tcp_state == TCP_SYN_RECEIVED)
+        {
+            time_t current_time = time(NULL);
+
+            if (difftime(current_time, syn_sent_time) >= rto)
+            {
+                printf("SYN-ACK timeout!\n");
+
+                if (syn_ack_retries < 3)
+                {
+                    printf("Retransmitting SYN-ACK...\n");
+
+                    send_tcp_syn_ack(
+                        fd,
+                        syn_request
+                    );
+
+                    syn_sent_time = current_time;
+                    syn_ack_retries++;
+
+                    printf(
+                        "SYN-ACK retransmission count: %d\n",
+                        syn_ack_retries
+                    );
+                }
+                else
+                {
+                    printf("Maximum SYN-ACK retries reached\n");
+
+                    tcp_state = TCP_CLOSED;
+                }
+            }
+        }
+
+        continue;
+    }
+
+    int n = read(fd, buffer, sizeof(buffer));        if (n < 0)
+        {
+            perror("Error reading from TAP");
+            break;
+        }
+        log_stackscope_packet((unsigned char *)buffer, n);
+
+        printf("\nReceived Ethernet frame: %d bytes\n", n);
+
+        /* Ethernet header */
+
+        printf(
+            "Destination MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+            buffer[0] & 0xFF,
+            buffer[1] & 0xFF,
+            buffer[2] & 0xFF,
+            buffer[3] & 0xFF,
+            buffer[4] & 0xFF,
+            buffer[5] & 0xFF
+        );
+
+        printf(
+            "Source MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+            buffer[6] & 0xFF,
+            buffer[7] & 0xFF,
+            buffer[8] & 0xFF,
+            buffer[9] & 0xFF,
+            buffer[10] & 0xFF,
+            buffer[11] & 0xFF
+        );
+
+        unsigned short ethertype =
+            ((unsigned short)(buffer[12] & 0xFF) << 8) |
+            (buffer[13] & 0xFF);
+
+        printf("EtherType: 0x%04X\n", ethertype);
+
+        /* ARP */
+
+        if (ethertype == 0x0806)
+        {
+            printf("\n--- ARP Packet ---\n");
+
+            unsigned short operation =
+                ((unsigned short)(buffer[20] & 0xFF) << 8) |
+                (buffer[21] & 0xFF);
+
+            printf("ARP Operation: %d\n", operation);
+
+            if (operation == 1)
+            {
+                printf("ARP Request received\n");
+
+                printf(
+                    "Sender IP: %d.%d.%d.%d\n",
+                    buffer[28] & 0xFF,
+                    buffer[29] & 0xFF,
+                    buffer[30] & 0xFF,
+                    buffer[31] & 0xFF
+                );
+
+                printf(
+                    "Target IP: %d.%d.%d.%d\n",
+                    buffer[38] & 0xFF,
+                    buffer[39] & 0xFF,
+                    buffer[40] & 0xFF,
+                    buffer[41] & 0xFF
+                );
+
+                /* Check if ARP is for our IP */
+
+                if ((buffer[38] & 0xFF) == 10 &&
+                    (buffer[39] & 0xFF) == 123 &&
+                    (buffer[40] & 0xFF) == 45 &&
+                    (buffer[41] & 0xFF) == 2)
+                {
+                    send_arp_reply(fd, (unsigned char *)buffer);
+                }
+            }
+        }
+
+        /* IPv4 */
+
+        else if (ethertype == 0x0800)
+        {
+            printf("\n--- IPv4 Packet ---\n");
+
+            unsigned char version =
+                (buffer[14] >> 4) & 0x0F;
+
+            unsigned char ihl =
+                buffer[14] & 0x0F;
+
+            int ip_header_length = ihl * 4;
+
+            unsigned short total_length =
+                ((unsigned short)(buffer[16] & 0xFF) << 8) |
+                (buffer[17] & 0xFF);
+
+            unsigned char ttl = buffer[22];
+
+            unsigned char protocol = buffer[23];
+
+            printf(
+                "Version: %d\n",
+                version
+            );
+
+            printf(
+                "Header Length: %d bytes\n",
+                ip_header_length
+            );
+
+            printf(
+                "Total Length: %d bytes\n",
+                total_length
+            );
+
+            printf(
+                "TTL: %d\n",
+                ttl
+            );
+
+            printf(
+                "Protocol: %d\n",
+                protocol
+            );
+
+            printf(
+                "Source IP: %d.%d.%d.%d\n",
+                buffer[26] & 0xFF,
+                buffer[27] & 0xFF,
+                buffer[28] & 0xFF,
+                buffer[29] & 0xFF
+            );
+
+            printf(
+                "Destination IP: %d.%d.%d.%d\n",
+                buffer[30] & 0xFF,
+                buffer[31] & 0xFF,
+                buffer[32] & 0xFF,
+                buffer[33] & 0xFF
+            );
+
+            /* IPv4 checksum */
+
+            unsigned short ip_checksum =
+                calculate_checksum(
+                    (unsigned char *)(buffer + 14),
+                    ip_header_length
+                );
+
+            printf(
+                "Calculated Checksum: 0x%04X\n",
+                ip_checksum
+            );
+
+            if (ip_checksum == 0)
+            {
+                printf("IPv4 Checksum: VALID\n");
+            }
+            else
+            {
+                printf("IPv4 Checksum: INVALID\n");
+            }
+
+            /* ICMP */
+
+            if (protocol == 1)
+            {
+                printf("\n--- ICMP Packet ---\n");
+
+                int icmp_start =
+                    14 + ip_header_length;
+
+                unsigned char type =
+                    buffer[icmp_start];
+
+                unsigned char code =
+                    buffer[icmp_start + 1];
+
+                unsigned short checksum =
+                    ((unsigned short)(buffer[icmp_start + 2] & 0xFF) << 8) |
+                    (buffer[icmp_start + 3] & 0xFF);
+
+                printf("ICMP Type: %d\n", type);
+                printf("ICMP Code: %d\n", code);
+                printf("ICMP Checksum: 0x%04X\n", checksum);
+
+                if (type == 8)
+                {
+                    printf("ICMP Echo Request received\n");
+                }
+                else if (type == 0)
+                {
+                    printf("ICMP Echo Reply received\n");
+                }
+            }
+
+            /* UDP */
+
+            else if (protocol == 17)
+            {
+                printf("\n--- UDP Packet ---\n");
+
+                int udp_start =
+                    14 + ip_header_length;
+
+                unsigned short source_port =
+                    ((unsigned short)(buffer[udp_start] & 0xFF) << 8) |
+                    (buffer[udp_start + 1] & 0xFF);
+
+                unsigned short destination_port =
+                    ((unsigned short)(buffer[udp_start + 2] & 0xFF) << 8) |
+                    (buffer[udp_start + 3] & 0xFF);
+
+                unsigned short udp_length =
+                    ((unsigned short)(buffer[udp_start + 4] & 0xFF) << 8) |
+                    (buffer[udp_start + 5] & 0xFF);
+
+                unsigned short udp_checksum =
+                    ((unsigned short)(buffer[udp_start + 6] & 0xFF) << 8) |
+                    (buffer[udp_start + 7] & 0xFF);
+
+                printf(
+                    "Source Port: %d\n",
+                    source_port
+                );
+
+                printf(
+                    "Destination Port: %d\n",
+                    destination_port
+                );
+
+                printf(
+                    "UDP Length: %d\n",
+                    udp_length
+                );
+
+                printf(
+                    "UDP Checksum: 0x%04X\n",
+                    udp_checksum
+                );
+            }
+
+            /* TCP */
+
+            else if (protocol == 6)
+            {
+                printf("\n--- TCP Packet ---\n");
+
+                int tcp_start =
+                    14 + ip_header_length;
+
+                unsigned short source_port =
+                    ((unsigned short)(buffer[tcp_start] & 0xFF) << 8) |
+                    (buffer[tcp_start + 1] & 0xFF);
+
+                unsigned short destination_port =
+                    ((unsigned short)(buffer[tcp_start + 2] & 0xFF) << 8) |
+                    (buffer[tcp_start + 3] & 0xFF);
+
+                unsigned int sequence_number =
+                    ((unsigned int)(buffer[tcp_start + 4] & 0xFF) << 24) |
+                    ((unsigned int)(buffer[tcp_start + 5] & 0xFF) << 16) |
+                    ((unsigned int)(buffer[tcp_start + 6] & 0xFF) << 8) |
+                    (buffer[tcp_start + 7] & 0xFF);
+
+                unsigned int acknowledgment_number =
+                    ((unsigned int)(buffer[tcp_start + 8] & 0xFF) << 24) |
+                    ((unsigned int)(buffer[tcp_start + 9] & 0xFF) << 16) |
+                    ((unsigned int)(buffer[tcp_start + 10] & 0xFF) << 8) |
+                    (buffer[tcp_start + 11] & 0xFF);
+
+                unsigned char tcp_header_length =
+                    ((buffer[tcp_start + 12] >> 4) & 0x0F) * 4;
+
+                int tcp_payload_start =
+                    tcp_start + tcp_header_length;
+
+                int tcp_payload_length =
+                    total_length - ip_header_length - tcp_header_length;
+                unsigned char flags =
+                    buffer[tcp_start + 13];
+
+                unsigned short window_size =
+                    ((unsigned short)(buffer[tcp_start + 14] & 0xFF) << 8) |
+                    (buffer[tcp_start + 15] & 0xFF);
+
+                unsigned short tcp_checksum =
+                    ((unsigned short)(buffer[tcp_start + 16] & 0xFF) << 8) |
+                    (buffer[tcp_start + 17] & 0xFF);
+
+                printf(
+                    "Source Port: %d\n",
+                    source_port
+                );
+
+                printf(
+                    "Destination Port: %d\n",
+                    destination_port
+                );
+
+                printf(
+                    "Sequence Number: %u\n",
+                    sequence_number
+                );
+
+                printf(
+                    "Acknowledgment Number: %u\n",
+                    acknowledgment_number
+                );
+
+                printf(
+                    "TCP Header Length: %d bytes\n",
+                    tcp_header_length
+                );
+
+                printf(
+                    "Flags: 0x%02X\n",
+                    flags
+                );
+
+                printf(
+                    "Window Size: %d\n",
+                    window_size
+                );
+
+                printf(
+                    "Checksum: 0x%04X\n",
+                    tcp_checksum
+                );
+
+                /* SYN flag */
+if (flags & 0x02)
+{
+    printf("SYN flag set\n");
+    printf("Current TCP state: %d\n", tcp_state);
+
+    if (tcp_state == TCP_LISTEN)
+    {
+        printf("TCP state: LISTEN -> SYN-RECEIVED\n");
+
+        tcp_state = TCP_SYN_RECEIVED;
+
+        /* Store client's sequence number */
+
+        tcp_ack_number = sequence_number + 1;
+        tcp_expected_client_sequence = sequence_number + 1;
+        memcpy(syn_request, buffer, n);
+        syn_request_length = n;
+/* Send SYN-ACK */
+
+        send_tcp_syn_ack(
+    fd,
+    syn_request
+);
+tcp_sequence_number = 2;
+syn_sent_time = time(NULL);
+syn_ack_retries = 0;
+
+printf("SYN-ACK timer started\n");
+    }
+}
+
+
+if (flags & 0x10)
+{
+    printf("ACK flag set\n");
+
+    if (tcp_state == TCP_SYN_RECEIVED)
+    {
+        printf("TCP state: SYN-RECEIVED -> ESTABLISHED\n");
+
+        time_t ack_received_time = time(NULL);
+
+        rtt = difftime(ack_received_time, syn_sent_time);
+
+        rto = rtt * 2;
+
+        if (rto < 3.0)
+        {
+            rto = 3.0;
+        }
+
+        printf("RTT: %.2f seconds\n", rtt);
+        printf("RTO: %.2f seconds\n", rto);
+
+        tcp_state = TCP_ESTABLISHED;
+
+        printf("TCP connection established!\n");
+    }
+}
+
+/* TCP FIN */
+
+if (flags & 0x01)
+{
+    printf("FIN flag set\n");
+
+    if (tcp_state == TCP_ESTABLISHED)
+    {
+        printf("TCP state: ESTABLISHED -> CLOSE-WAIT\n");
+
+        /* Acknowledge peer FIN */
+
+        tcp_ack_number = sequence_number + 1;
+
+        printf(
+            "Sending FIN ACK Number: %u\n",
+            tcp_ack_number
+        );
+
+        send_tcp_ack(
+            fd,
+            (unsigned char *)buffer,
+            tcp_ack_number
+        );
+
+        /* Send our FIN */
+
+        printf("Sending our FIN...\n");
+
+        send_tcp_fin_ack(
+            fd,
+            (unsigned char *)buffer,
+            tcp_ack_number
+        );
+
+        tcp_sequence_number++;
+
+        tcp_state = TCP_LAST_ACK;
+
+        printf("TCP state: CLOSE-WAIT -> LAST-ACK\n");
+    }
+}
+
+/* Final ACK */
+
+if (tcp_state == TCP_LAST_ACK &&
+    (flags & 0x10))
+{
+    printf("Final ACK received\n");
+
+    tcp_state = TCP_CLOSED;
+
+    printf("TCP state: LAST-ACK -> CLOSED\n");
+}
+/* TCP data */
+
+if (tcp_state == TCP_ESTABLISHED &&
+    tcp_payload_length > 0)
+{
+    printf("\n--- TCP DATA ---\n");
+    printf("Payload Length: %d bytes\n", tcp_payload_length);
+    printf("Client Sequence Number: %u\n", sequence_number);
+    printf("Expected Sequence Number: %u\n",
+           tcp_expected_client_sequence);
+
+    if (sequence_number == tcp_expected_client_sequence)
+    {
+        printf("Data: ");
+
+        for (int i = 0; i < tcp_payload_length; i++)
+        {
+            unsigned char c = buffer[tcp_payload_start + i];
+
+            if (c >= 32 && c <= 126)
+                printf("%c", c);
+            else
+                printf(".");
+        }
+
+        printf("\n");
+
+        tcp_expected_client_sequence += tcp_payload_length;
+    }
+    else
+    {
+        printf("Duplicate or out-of-order TCP data received\n");
+    }
+
+    tcp_ack_number = tcp_expected_client_sequence;
+
+    printf("Sending ACK Number: %u\n", tcp_ack_number);
+
+    send_tcp_ack(
+        fd,
+        (unsigned char *)buffer,
+        tcp_ack_number
+    );
+}
+                /* RST flag */
+                if (flags & 0x04)
+                {
+                    printf("RST flag set\n");
+                }
+            }
+        }
+        else if (ethertype == 0x86DD)
+        {
+            printf("IPv6 packet received - ignored for now\n");
+        }
+        else
+        {
+            printf("Unknown EtherType\n");
+        }
+    }
+
+    close(fd);
+    return 0;
+}
+
+===== FILE: src/tap_before_dashboard.c =====
+#include <sys/select.h>
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/if_tun.h>
+#include <net/if.h>
+#include <time.h>
+
+unsigned int tcp_sequence_number = 1;
+unsigned int tcp_ack_number = 0;
+unsigned int tcp_expected_client_sequence = 0;
+
+time_t syn_sent_time;
+unsigned char syn_request[2000];
+int syn_request_length = 0;
+int syn_ack_retries = 0;
+double rtt = 0.0;
+double rto = 3.0;
+
+/* TCP connection states */
+
+#define TCP_CLOSED       0
+#define TCP_LISTEN       1
+#define TCP_SYN_RECEIVED 2
+#define TCP_ESTABLISHED  3
+#define TCP_CLOSE_WAIT   4
+#define TCP_LAST_ACK     5
+
+int tcp_state = TCP_CLOSED;
+
+
+/* Calculate Internet checksum */
+
+unsigned short calculate_checksum(unsigned char *data, int length)
+{
+    unsigned long sum = 0;
+
+    for (int i = 0; i < length; i += 2)
+    {
+        unsigned short word =
+            ((unsigned short)data[i] << 8) | data[i + 1];
+
+        sum += word;
+    }
+
+    while (sum >> 16)
+    {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    return (unsigned short)(~sum);
+}
+
+
+/* Calculate TCP checksum */
+
+unsigned short calculate_tcp_checksum(
+    unsigned char *src_ip,
+    unsigned char *dst_ip,
+    unsigned char *tcp,
+    int tcp_length)
+{
+    unsigned long sum = 0;
+
+    /* Source IP */
+
+    sum += ((unsigned short)src_ip[0] << 8) | src_ip[1];
+    sum += ((unsigned short)src_ip[2] << 8) | src_ip[3];
+
+    /* Destination IP */
+
+    sum += ((unsigned short)dst_ip[0] << 8) | dst_ip[1];
+    sum += ((unsigned short)dst_ip[2] << 8) | dst_ip[3];
+
+    /* Protocol = TCP */
+
+    sum += 6;
+
+    /* TCP length */
+
+    sum += tcp_length;
+
+    /* TCP header */
+
+    for (int i = 0; i < tcp_length; i += 2)
+    {
+        unsigned short word =
+            ((unsigned short)tcp[i] << 8) | tcp[i + 1];
+
+        sum += word;
+    }
+
+    /* Fold carries */
+
+    while (sum >> 16)
+    {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    return (unsigned short)(~sum);
+}
+
+void send_tcp_ack(
+    int fd,
+    unsigned char *request,
+    unsigned int acknowledgment_number)
+{
+    unsigned char reply[54];
+
+    memset(reply, 0, sizeof(reply));
+/* Ethernet header */
+
+/* Destination MAC = client's MAC */
+memcpy(reply, request + 6, 6);
+
+/* Source MAC = our TAP MAC */
+unsigned char our_mac[6] = {
+    0x42, 0x1e, 0xe8, 0xf2, 0xe7, 0xee
+};
+memcpy(reply + 6, our_mac, 6);
+
+/* EtherType = IPv4 */
+reply[12] = 0x08;
+reply[13] = 0x00;
+    /* IPv4 header */
+
+    reply[14] = 0x45;
+    reply[15] = 0x00;
+
+    reply[16] = 0x00;
+    reply[17] = 0x28;
+
+    reply[18] = 0x00;
+    reply[19] = 0x00;
+
+    reply[20] = 0x40;
+    reply[21] = 0x00;
+
+    reply[22] = 64;
+    reply[23] = 6;
+
+    /* Source IP = 10.123.45.2 */
+
+    reply[26] = 10;
+    reply[27] = 123;
+    reply[28] = 45;
+    reply[29] = 2;
+
+    /* Destination IP = request source IP */
+
+    memcpy(reply + 30, request + 26, 4);
+
+    /* IPv4 checksum */
+
+    reply[24] = 0;
+    reply[25] = 0;
+
+    unsigned short ip_checksum =
+        calculate_checksum(reply + 14, 20);
+
+    reply[24] = ip_checksum >> 8;
+    reply[25] = ip_checksum & 0xFF;
+
+    /* TCP source port = request destination port */
+
+    reply[34] = request[36];
+    reply[35] = request[37];
+
+    /* TCP destination port = request source port */
+
+    reply[36] = request[34];
+    reply[37] = request[35];
+
+    /* Sequence number */
+
+reply[38] = (tcp_sequence_number >> 24) & 0xFF;
+reply[39] = (tcp_sequence_number >> 16) & 0xFF;
+reply[40] = (tcp_sequence_number >> 8) & 0xFF;
+reply[41] = tcp_sequence_number & 0xFF;
+
+    /* Acknowledgment number */
+
+    reply[42] = (acknowledgment_number >> 24) & 0xFF;
+    reply[43] = (acknowledgment_number >> 16) & 0xFF;
+    reply[44] = (acknowledgment_number >> 8) & 0xFF;
+    reply[45] = acknowledgment_number & 0xFF;
+
+    /* TCP header length = 20 bytes */
+
+    reply[46] = 0x50;
+
+    /* ACK flag */
+
+    reply[47] = 0x10;
+
+    /* Window size */
+
+    reply[48] = 0xFA;
+    reply[49] = 0xF0;
+
+    /* TCP checksum */
+
+    reply[50] = 0;
+    reply[51] = 0;
+
+    unsigned short tcp_checksum =
+        calculate_tcp_checksum(
+            reply + 26,
+            reply + 30,
+            reply + 34,
+            20
+        );
+
+    reply[50] = tcp_checksum >> 8;
+    reply[51] = tcp_checksum & 0xFF;
+
+    /* Send ACK */
+
+    if (write(fd, reply, 54) < 0)
+    {
+        perror("TCP ACK send failed");
+    }
+    else
+    {
+        printf("TCP ACK sent!\n");
+    }
+}
+void send_tcp_fin_ack(
+    int fd,
+    unsigned char *request,
+    unsigned int acknowledgment_number)
+{
+    unsigned char reply[54];
+
+    memset(reply, 0, sizeof(reply));
+
+    /* Ethernet header */
+
+    memcpy(reply, request + 6, 6);
+    memcpy(reply + 6, request, 6);
+
+    reply[12] = 0x08;
+    reply[13] = 0x00;
+
+    /* IPv4 header */
+
+    reply[14] = 0x45;
+    reply[15] = 0x00;
+
+    reply[16] = 0x00;
+    reply[17] = 0x28;
+
+    reply[18] = 0x00;
+    reply[19] = 0x00;
+
+    reply[20] = 0x40;
+    reply[21] = 0x00;
+
+    reply[22] = 64;
+    reply[23] = 6;
+
+    /* Source IP */
+
+    reply[26] = 10;
+    reply[27] = 123;
+    reply[28] = 45;
+    reply[29] = 2;
+
+    /* Destination IP */
+
+    memcpy(reply + 30, request + 26, 4);
+
+    /* IPv4 checksum */
+
+    reply[24] = 0;
+    reply[25] = 0;
+
+    unsigned short ip_checksum =
+        calculate_checksum(reply + 14, 20);
+
+    reply[24] = ip_checksum >> 8;
+    reply[25] = ip_checksum & 0xFF;
+
+    /* TCP source port */
+
+    reply[34] = request[36];
+    reply[35] = request[37];
+
+    /* TCP destination port */
+
+    reply[36] = request[34];
+    reply[37] = request[35];
+
+    /* Sequence number */
+
+    reply[38] = (tcp_sequence_number >> 24) & 0xFF;
+    reply[39] = (tcp_sequence_number >> 16) & 0xFF;
+    reply[40] = (tcp_sequence_number >> 8) & 0xFF;
+    reply[41] = tcp_sequence_number & 0xFF;
+
+    /* Acknowledgment number */
+
+    reply[42] = (acknowledgment_number >> 24) & 0xFF;
+    reply[43] = (acknowledgment_number >> 16) & 0xFF;
+    reply[44] = (acknowledgment_number >> 8) & 0xFF;
+    reply[45] = acknowledgment_number & 0xFF;
+
+    /* TCP header length = 20 bytes */
+
+    reply[46] = 0x50;
+
+    /* FIN + ACK flags */
+
+    reply[47] = 0x11;
+
+    /* Window size */
+
+    reply[48] = 0xFA;
+    reply[49] = 0xF0;
+
+    /* TCP checksum */
+
+    reply[50] = 0;
+    reply[51] = 0;
+
+    unsigned short tcp_checksum =
+        calculate_tcp_checksum(
+            reply + 26,
+            reply + 30,
+            reply + 34,
+            20
+        );
+
+    reply[50] = tcp_checksum >> 8;
+    reply[51] = tcp_checksum & 0xFF;
+
+    /* Send FIN + ACK */
+
+    if (write(fd, reply, 54) < 0)
+    {
+        perror("TCP FIN-ACK send failed");
+    }
+    else
+    {
+        printf("TCP FIN-ACK sent!\n");
+    }
+}
+
+/* Send TCP SYN-ACK */
+
+void send_tcp_syn_ack(int fd, unsigned char *request)
+{
+    unsigned char reply[54];
+
+    /* Ethernet header */
+
+    memcpy(reply, request + 6, 6);
+
+    reply[12] = 0x08;
+    reply[13] = 0x00;
+
+    /* IPv4 header */
+
+    reply[14] = 0x45;
+    reply[15] = 0x00;
+
+    /* Total length = 40 bytes */
+
+    reply[16] = 0x00;
+    reply[17] = 0x28;
+
+    /* Identification */
+
+    reply[18] = 0x00;
+    reply[19] = 0x00;
+
+    /* Flags and fragment offset */
+
+    reply[20] = 0x40;
+    reply[21] = 0x00;
+
+    /* TTL */
+
+    reply[22] = 64;
+
+    /* Protocol = TCP */
+
+    reply[23] = 6;
+
+    /* IPv4 checksum initially zero */
+
+    reply[24] = 0x00;
+    reply[25] = 0x00;
+
+    /* Source IP = 10.123.45.2 */
+
+    reply[26] = 10;
+    reply[27] = 123;
+    reply[28] = 45;
+    reply[29] = 2;
+
+    /* Destination IP = client's IP */
+
+    memcpy(reply + 30, request + 26, 4);
+
+    /* Calculate IPv4 checksum */
+
+    unsigned short ip_checksum =
+        calculate_checksum(reply + 14, 20);
+
+    reply[24] = ip_checksum >> 8;
+    reply[25] = ip_checksum & 0xFF;
+
+    /* TCP header */
+
+    unsigned char *tcp = reply + 34;
+
+    /* Source port = client's destination port */
+
+    tcp[0] = request[36];
+    tcp[1] = request[37];
+
+    /* Destination port = client's source port */
+
+    tcp[2] = request[34];
+    tcp[3] = request[35];
+
+    /* Sequence number */
+
+    tcp[4] = 0x00;
+    tcp[5] = 0x00;
+    tcp[6] = 0x00;
+    tcp[7] = 0x01;
+
+    /* Get client's sequence number */
+
+    unsigned int client_seq =
+        ((unsigned int)request[38] << 24) |
+        ((unsigned int)request[39] << 16) |
+        ((unsigned int)request[40] << 8) |
+        request[41];
+
+    /* ACK number = client sequence + 1 */
+
+    unsigned int ack_number = client_seq + 1;
+
+    tcp[8] = ack_number >> 24;
+    tcp[9] = ack_number >> 16;
+    tcp[10] = ack_number >> 8;
+    tcp[11] = ack_number;
+
+    /* TCP header length = 20 bytes */
+
+    tcp[12] = 0x50;
+
+    /* SYN + ACK */
+
+    tcp[13] = 0x12;
+
+    /* Window size */
+
+    tcp[14] = 0xFA;
+    tcp[15] = 0xF0;
+
+    /* TCP checksum initially zero */
+
+    tcp[16] = 0x00;
+    tcp[17] = 0x00;
+
+    /* Urgent pointer */
+
+    tcp[18] = 0x00;
+    tcp[19] = 0x00;
+
+    /* TCP checksum */
+
+    unsigned char src_ip[4] = {10, 123, 45, 2};
+    unsigned char dst_ip[4];
+
+    memcpy(dst_ip, request + 26, 4);
+
+    unsigned short tcp_checksum =
+        calculate_tcp_checksum(
+            src_ip,
+            dst_ip,
+            tcp,
+            20
+        );
+
+    tcp[16] = tcp_checksum >> 8;
+    tcp[17] = tcp_checksum & 0xFF;
+
+    printf("\nSending TCP SYN-ACK...\n");
+
+    if (write(fd, reply, 54) < 0)
+    {
+        perror("Error sending TCP SYN-ACK");
+    }
+    else
+    {
+        printf("TCP SYN-ACK sent!\n");
+    }
+}
+
+
+/* Send ARP reply */
+
+void send_arp_reply(int fd, unsigned char *request)
+{
+    unsigned char reply[42];
+
+    unsigned char our_ip[4] = {10, 123, 45, 2};
+
+    /* Ethernet header */
+
+    memcpy(reply, request + 6, 6);
+    memcpy(reply + 6, request + 6, 6);
+
+    reply[12] = 0x08;
+    reply[13] = 0x06;
+
+    /* ARP header */
+
+    reply[14] = 0x00;
+    reply[15] = 0x01;
+
+    reply[16] = 0x08;
+    reply[17] = 0x00;
+
+    reply[18] = 6;
+    reply[19] = 4;
+
+    /* ARP reply */
+
+    reply[20] = 0x00;
+    reply[21] = 0x02;
+
+    /* Sender MAC */
+
+    memcpy(reply + 22, request + 6, 6);
+
+    /* Sender IP */
+
+    memcpy(reply + 28, our_ip, 4);
+
+    /* Target MAC */
+
+    memcpy(reply + 32, request + 6, 6);
+
+    /* Target IP */
+
+    memcpy(reply + 38, request + 28, 4);
+
+    if (write(fd, reply, 42) < 0)
+    {
+        perror("Error sending ARP reply");
+    }
+    else
+    {
+        printf("ARP Reply sent!\n");
+    }
+}
+
+
+/* Main */
+
+int main()
+{
+    int fd;
+
+    struct ifreq ifr;
+
+    char buffer[2000];
+
+    /* Open TAP device */
+
+    fd = open("/dev/net/tun", O_RDWR);
+
+    if (fd < 0)
+    {
+        perror("Error opening /dev/net/tun");
+        return 1;
+    }
+
+    /* Configure TAP */
+
+    memset(&ifr, 0, sizeof(ifr));
+
+    ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
+
+    strncpy(ifr.ifr_name, "tap0", IFNAMSIZ);
+
+    if (ioctl(fd, TUNSETIFF, (void *)&ifr) < 0)
+    {
+        perror("Error creating TAP interface");
+        close(fd);
+        return 1;
+    }
+    tcp_state = TCP_LISTEN;
+
+    printf("TCP state: LISTEN\n");
+    printf("TAP interface created: %s\n", ifr.ifr_name);
+    printf("Waiting for Ethernet frames...\n");
+
+    /* Read packets continuously */
+
+
+while (1)
+{
+    fd_set readfds;
+    struct timeval timeout;
+
+    FD_ZERO(&readfds);
+    FD_SET(fd, &readfds);
+
+    timeout.tv_sec = 1;
+    timeout.tv_usec = 0;
+
+    int ready = select(fd + 1, &readfds, NULL, NULL, &timeout);
+
+    if (ready < 0)
+    {
+        perror("select failed");
+        break;
+    }
+
+    if (ready == 0)
+    {
+        /* No packet received - check retransmission timer */
+
+        if (tcp_state == TCP_SYN_RECEIVED)
+        {
+            time_t current_time = time(NULL);
+
+            if (difftime(current_time, syn_sent_time) >= rto)
+            {
+                printf("SYN-ACK timeout!\n");
+
+                if (syn_ack_retries < 3)
+                {
+                    printf("Retransmitting SYN-ACK...\n");
+
+                    send_tcp_syn_ack(
+                        fd,
+                        syn_request
+                    );
+
+                    syn_sent_time = current_time;
+                    syn_ack_retries++;
+
+                    printf(
+                        "SYN-ACK retransmission count: %d\n",
+                        syn_ack_retries
+                    );
+                }
+                else
+                {
+                    printf("Maximum SYN-ACK retries reached\n");
+
+                    tcp_state = TCP_CLOSED;
+                }
+            }
+        }
+
+        continue;
+    }
+
+    int n = read(fd, buffer, sizeof(buffer));        if (n < 0)
+        {
+            perror("Error reading from TAP");
+            break;
+        }
+
+        printf("\nReceived Ethernet frame: %d bytes\n", n);
+
+        /* Ethernet header */
+
+        printf(
+            "Destination MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+            buffer[0] & 0xFF,
+            buffer[1] & 0xFF,
+            buffer[2] & 0xFF,
+            buffer[3] & 0xFF,
+            buffer[4] & 0xFF,
+            buffer[5] & 0xFF
+        );
+
+        printf(
+            "Source MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+            buffer[6] & 0xFF,
+            buffer[7] & 0xFF,
+            buffer[8] & 0xFF,
+            buffer[9] & 0xFF,
+            buffer[10] & 0xFF,
+            buffer[11] & 0xFF
+        );
+
+        unsigned short ethertype =
+            ((unsigned short)(buffer[12] & 0xFF) << 8) |
+            (buffer[13] & 0xFF);
+
+        printf("EtherType: 0x%04X\n", ethertype);
+
+        /* ARP */
+
+        if (ethertype == 0x0806)
+        {
+            printf("\n--- ARP Packet ---\n");
+
+            unsigned short operation =
+                ((unsigned short)(buffer[20] & 0xFF) << 8) |
+                (buffer[21] & 0xFF);
+
+            printf("ARP Operation: %d\n", operation);
+
+            if (operation == 1)
+            {
+                printf("ARP Request received\n");
+
+                printf(
+                    "Sender IP: %d.%d.%d.%d\n",
+                    buffer[28] & 0xFF,
+                    buffer[29] & 0xFF,
+                    buffer[30] & 0xFF,
+                    buffer[31] & 0xFF
+                );
+
+                printf(
+                    "Target IP: %d.%d.%d.%d\n",
+                    buffer[38] & 0xFF,
+                    buffer[39] & 0xFF,
+                    buffer[40] & 0xFF,
+                    buffer[41] & 0xFF
+                );
+
+                /* Check if ARP is for our IP */
+
+                if ((buffer[38] & 0xFF) == 10 &&
+                    (buffer[39] & 0xFF) == 123 &&
+                    (buffer[40] & 0xFF) == 45 &&
+                    (buffer[41] & 0xFF) == 2)
+                {
+                    send_arp_reply(fd, (unsigned char *)buffer);
+                }
+            }
+        }
+
+        /* IPv4 */
+
+        else if (ethertype == 0x0800)
+        {
+            printf("\n--- IPv4 Packet ---\n");
+
+            unsigned char version =
+                (buffer[14] >> 4) & 0x0F;
+
+            unsigned char ihl =
+                buffer[14] & 0x0F;
+
+            int ip_header_length = ihl * 4;
+
+            unsigned short total_length =
+                ((unsigned short)(buffer[16] & 0xFF) << 8) |
+                (buffer[17] & 0xFF);
+
+            unsigned char ttl = buffer[22];
+
+            unsigned char protocol = buffer[23];
+
+            printf(
+                "Version: %d\n",
+                version
+            );
+
+            printf(
+                "Header Length: %d bytes\n",
+                ip_header_length
+            );
+
+            printf(
+                "Total Length: %d bytes\n",
+                total_length
+            );
+
+            printf(
+                "TTL: %d\n",
+                ttl
+            );
+
+            printf(
+                "Protocol: %d\n",
+                protocol
+            );
+
+            printf(
+                "Source IP: %d.%d.%d.%d\n",
+                buffer[26] & 0xFF,
+                buffer[27] & 0xFF,
+                buffer[28] & 0xFF,
+                buffer[29] & 0xFF
+            );
+
+            printf(
+                "Destination IP: %d.%d.%d.%d\n",
+                buffer[30] & 0xFF,
+                buffer[31] & 0xFF,
+                buffer[32] & 0xFF,
+                buffer[33] & 0xFF
+            );
+
+            /* IPv4 checksum */
+
+            unsigned short ip_checksum =
+                calculate_checksum(
+                    (unsigned char *)(buffer + 14),
+                    ip_header_length
+                );
+
+            printf(
+                "Calculated Checksum: 0x%04X\n",
+                ip_checksum
+            );
+
+            if (ip_checksum == 0)
+            {
+                printf("IPv4 Checksum: VALID\n");
+            }
+            else
+            {
+                printf("IPv4 Checksum: INVALID\n");
+            }
+
+            /* ICMP */
+
+            if (protocol == 1)
+            {
+                printf("\n--- ICMP Packet ---\n");
+
+                int icmp_start =
+                    14 + ip_header_length;
+
+                unsigned char type =
+                    buffer[icmp_start];
+
+                unsigned char code =
+                    buffer[icmp_start + 1];
+
+                unsigned short checksum =
+                    ((unsigned short)(buffer[icmp_start + 2] & 0xFF) << 8) |
+                    (buffer[icmp_start + 3] & 0xFF);
+
+                printf("ICMP Type: %d\n", type);
+                printf("ICMP Code: %d\n", code);
+                printf("ICMP Checksum: 0x%04X\n", checksum);
+
+                if (type == 8)
+                {
+                    printf("ICMP Echo Request received\n");
+                }
+                else if (type == 0)
+                {
+                    printf("ICMP Echo Reply received\n");
+                }
+            }
+
+            /* UDP */
+
+            else if (protocol == 17)
+            {
+                printf("\n--- UDP Packet ---\n");
+
+                int udp_start =
+                    14 + ip_header_length;
+
+                unsigned short source_port =
+                    ((unsigned short)(buffer[udp_start] & 0xFF) << 8) |
+                    (buffer[udp_start + 1] & 0xFF);
+
+                unsigned short destination_port =
+                    ((unsigned short)(buffer[udp_start + 2] & 0xFF) << 8) |
+                    (buffer[udp_start + 3] & 0xFF);
+
+                unsigned short udp_length =
+                    ((unsigned short)(buffer[udp_start + 4] & 0xFF) << 8) |
+                    (buffer[udp_start + 5] & 0xFF);
+
+                unsigned short udp_checksum =
+                    ((unsigned short)(buffer[udp_start + 6] & 0xFF) << 8) |
+                    (buffer[udp_start + 7] & 0xFF);
+
+                printf(
+                    "Source Port: %d\n",
+                    source_port
+                );
+
+                printf(
+                    "Destination Port: %d\n",
+                    destination_port
+                );
+
+                printf(
+                    "UDP Length: %d\n",
+                    udp_length
+                );
+
+                printf(
+                    "UDP Checksum: 0x%04X\n",
+                    udp_checksum
+                );
+            }
+
+            /* TCP */
+
+            else if (protocol == 6)
+            {
+                printf("\n--- TCP Packet ---\n");
+
+                int tcp_start =
+                    14 + ip_header_length;
+
+                unsigned short source_port =
+                    ((unsigned short)(buffer[tcp_start] & 0xFF) << 8) |
+                    (buffer[tcp_start + 1] & 0xFF);
+
+                unsigned short destination_port =
+                    ((unsigned short)(buffer[tcp_start + 2] & 0xFF) << 8) |
+                    (buffer[tcp_start + 3] & 0xFF);
+
+                unsigned int sequence_number =
+                    ((unsigned int)(buffer[tcp_start + 4] & 0xFF) << 24) |
+                    ((unsigned int)(buffer[tcp_start + 5] & 0xFF) << 16) |
+                    ((unsigned int)(buffer[tcp_start + 6] & 0xFF) << 8) |
+                    (buffer[tcp_start + 7] & 0xFF);
+
+                unsigned int acknowledgment_number =
+                    ((unsigned int)(buffer[tcp_start + 8] & 0xFF) << 24) |
+                    ((unsigned int)(buffer[tcp_start + 9] & 0xFF) << 16) |
+                    ((unsigned int)(buffer[tcp_start + 10] & 0xFF) << 8) |
+                    (buffer[tcp_start + 11] & 0xFF);
+
+                unsigned char tcp_header_length =
+                    ((buffer[tcp_start + 12] >> 4) & 0x0F) * 4;
+
+                int tcp_payload_start =
+                    tcp_start + tcp_header_length;
+
+                int tcp_payload_length =
+                    total_length - ip_header_length - tcp_header_length;
+                unsigned char flags =
+                    buffer[tcp_start + 13];
+
+                unsigned short window_size =
+                    ((unsigned short)(buffer[tcp_start + 14] & 0xFF) << 8) |
+                    (buffer[tcp_start + 15] & 0xFF);
+
+                unsigned short tcp_checksum =
+                    ((unsigned short)(buffer[tcp_start + 16] & 0xFF) << 8) |
+                    (buffer[tcp_start + 17] & 0xFF);
+
+                printf(
+                    "Source Port: %d\n",
+                    source_port
+                );
+
+                printf(
+                    "Destination Port: %d\n",
+                    destination_port
+                );
+
+                printf(
+                    "Sequence Number: %u\n",
+                    sequence_number
+                );
+
+                printf(
+                    "Acknowledgment Number: %u\n",
+                    acknowledgment_number
+                );
+
+                printf(
+                    "TCP Header Length: %d bytes\n",
+                    tcp_header_length
+                );
+
+                printf(
+                    "Flags: 0x%02X\n",
+                    flags
+                );
+
+                printf(
+                    "Window Size: %d\n",
+                    window_size
+                );
+
+                printf(
+                    "Checksum: 0x%04X\n",
+                    tcp_checksum
+                );
+
+                /* SYN flag */
+if (flags & 0x02)
+{
+    printf("SYN flag set\n");
+    printf("Current TCP state: %d\n", tcp_state);
+
+    if (tcp_state == TCP_LISTEN)
+    {
+        printf("TCP state: LISTEN -> SYN-RECEIVED\n");
+
+        tcp_state = TCP_SYN_RECEIVED;
+
+        /* Store client's sequence number */
+
+        tcp_ack_number = sequence_number + 1;
+        tcp_expected_client_sequence = sequence_number + 1;
+        memcpy(syn_request, buffer, n);
+        syn_request_length = n;
+/* Send SYN-ACK */
+
+        send_tcp_syn_ack(
+    fd,
+    syn_request
+);
+tcp_sequence_number = 2;
+syn_sent_time = time(NULL);
+syn_ack_retries = 0;
+
+printf("SYN-ACK timer started\n");
+    }
+}
+
+
+if (flags & 0x10)
+{
+    printf("ACK flag set\n");
+
+    if (tcp_state == TCP_SYN_RECEIVED)
+    {
+        printf("TCP state: SYN-RECEIVED -> ESTABLISHED\n");
+
+        time_t ack_received_time = time(NULL);
+
+        rtt = difftime(ack_received_time, syn_sent_time);
+
+        rto = rtt * 2;
+
+        if (rto < 3.0)
+        {
+            rto = 3.0;
+        }
+
+        printf("RTT: %.2f seconds\n", rtt);
+        printf("RTO: %.2f seconds\n", rto);
+
+        tcp_state = TCP_ESTABLISHED;
+
+        printf("TCP connection established!\n");
+    }
+}
+
+/* TCP FIN */
+
+if (flags & 0x01)
+{
+    printf("FIN flag set\n");
+
+    if (tcp_state == TCP_ESTABLISHED)
+    {
+        printf("TCP state: ESTABLISHED -> CLOSE-WAIT\n");
+
+        /* Acknowledge peer FIN */
+
+        tcp_ack_number = sequence_number + 1;
+
+        printf(
+            "Sending FIN ACK Number: %u\n",
+            tcp_ack_number
+        );
+
+        send_tcp_ack(
+            fd,
+            (unsigned char *)buffer,
+            tcp_ack_number
+        );
+
+        /* Send our FIN */
+
+        printf("Sending our FIN...\n");
+
+        send_tcp_fin_ack(
+            fd,
+            (unsigned char *)buffer,
+            tcp_ack_number
+        );
+
+        tcp_sequence_number++;
+
+        tcp_state = TCP_LAST_ACK;
+
+        printf("TCP state: CLOSE-WAIT -> LAST-ACK\n");
+    }
+}
+
+/* Final ACK */
+
+if (tcp_state == TCP_LAST_ACK &&
+    (flags & 0x10))
+{
+    printf("Final ACK received\n");
+
+    tcp_state = TCP_CLOSED;
+
+    printf("TCP state: LAST-ACK -> CLOSED\n");
+}
+/* TCP data */
+
+if (tcp_state == TCP_ESTABLISHED &&
+    tcp_payload_length > 0)
+{
+    printf("\n--- TCP DATA ---\n");
+    printf("Payload Length: %d bytes\n", tcp_payload_length);
+    printf("Client Sequence Number: %u\n", sequence_number);
+    printf("Expected Sequence Number: %u\n",
+           tcp_expected_client_sequence);
+
+    if (sequence_number == tcp_expected_client_sequence)
+    {
+        printf("Data: ");
+
+        for (int i = 0; i < tcp_payload_length; i++)
+        {
+            unsigned char c = buffer[tcp_payload_start + i];
+
+            if (c >= 32 && c <= 126)
+                printf("%c", c);
+            else
+                printf(".");
+        }
+
+        printf("\n");
+
+        tcp_expected_client_sequence += tcp_payload_length;
+    }
+    else
+    {
+        printf("Duplicate or out-of-order TCP data received\n");
+    }
+
+    tcp_ack_number = tcp_expected_client_sequence;
+
+    printf("Sending ACK Number: %u\n", tcp_ack_number);
+
+    send_tcp_ack(
+        fd,
+        (unsigned char *)buffer,
+        tcp_ack_number
+    );
+}
+                /* RST flag */
+                if (flags & 0x04)
+                {
+                    printf("RST flag set\n");
+                }
+            }
+        }
+        else if (ethertype == 0x86DD)
+        {
+            printf("IPv6 packet received - ignored for now\n");
+        }
+        else
+        {
+            printf("Unknown EtherType\n");
+        }
+    }
+
+    close(fd);
+    return 0;
+}
+
+===== FILE: src/tap_final_backup.c =====
+#include <sys/select.h>
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/if_tun.h>
+#include <net/if.h>
+#include <time.h>
+
+unsigned int tcp_sequence_number = 1;
+unsigned int tcp_ack_number = 0;
+unsigned int tcp_expected_client_sequence = 0;
+
+time_t syn_sent_time;
+unsigned char syn_request[2000];
+int syn_request_length = 0;
+int syn_ack_retries = 0;
+double rtt = 0.0;
+double rto = 3.0;
+
+/* TCP connection states */
+
+#define TCP_CLOSED       0
+#define TCP_LISTEN       1
+#define TCP_SYN_RECEIVED 2
+#define TCP_ESTABLISHED  3
+#define TCP_CLOSE_WAIT   4
+#define TCP_LAST_ACK     5
+
+int tcp_state = TCP_CLOSED;
+
+
+/* Calculate Internet checksum */
+
+unsigned short calculate_checksum(unsigned char *data, int length)
+{
+    unsigned long sum = 0;
+
+    for (int i = 0; i < length; i += 2)
+    {
+        unsigned short word =
+            ((unsigned short)data[i] << 8) | data[i + 1];
+
+        sum += word;
+    }
+
+    while (sum >> 16)
+    {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    return (unsigned short)(~sum);
+}
+
+
+/* Calculate TCP checksum */
+
+unsigned short calculate_tcp_checksum(
+    unsigned char *src_ip,
+    unsigned char *dst_ip,
+    unsigned char *tcp,
+    int tcp_length)
+{
+    unsigned long sum = 0;
+
+    /* Source IP */
+
+    sum += ((unsigned short)src_ip[0] << 8) | src_ip[1];
+    sum += ((unsigned short)src_ip[2] << 8) | src_ip[3];
+
+    /* Destination IP */
+
+    sum += ((unsigned short)dst_ip[0] << 8) | dst_ip[1];
+    sum += ((unsigned short)dst_ip[2] << 8) | dst_ip[3];
+
+    /* Protocol = TCP */
+
+    sum += 6;
+
+    /* TCP length */
+
+    sum += tcp_length;
+
+    /* TCP header */
+
+    for (int i = 0; i < tcp_length; i += 2)
+    {
+        unsigned short word =
+            ((unsigned short)tcp[i] << 8) | tcp[i + 1];
+
+        sum += word;
+    }
+
+    /* Fold carries */
+
+    while (sum >> 16)
+    {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    return (unsigned short)(~sum);
+}
+
+void send_tcp_ack(
+    int fd,
+    unsigned char *request,
+    unsigned int acknowledgment_number)
+{
+    unsigned char reply[54];
+
+    memset(reply, 0, sizeof(reply));
+/* Ethernet header */
+
+/* Destination MAC = client's MAC */
+memcpy(reply, request + 6, 6);
+
+/* Source MAC = our TAP MAC */
+unsigned char our_mac[6] = {
+    0x42, 0x1e, 0xe8, 0xf2, 0xe7, 0xee
+};
+memcpy(reply + 6, our_mac, 6);
+
+/* EtherType = IPv4 */
+reply[12] = 0x08;
+reply[13] = 0x00;
+    /* IPv4 header */
+
+    reply[14] = 0x45;
+    reply[15] = 0x00;
+
+    reply[16] = 0x00;
+    reply[17] = 0x28;
+
+    reply[18] = 0x00;
+    reply[19] = 0x00;
+
+    reply[20] = 0x40;
+    reply[21] = 0x00;
+
+    reply[22] = 64;
+    reply[23] = 6;
+
+    /* Source IP = 10.123.45.2 */
+
+    reply[26] = 10;
+    reply[27] = 123;
+    reply[28] = 45;
+    reply[29] = 2;
+
+    /* Destination IP = request source IP */
+
+    memcpy(reply + 30, request + 26, 4);
+
+    /* IPv4 checksum */
+
+    reply[24] = 0;
+    reply[25] = 0;
+
+    unsigned short ip_checksum =
+        calculate_checksum(reply + 14, 20);
+
+    reply[24] = ip_checksum >> 8;
+    reply[25] = ip_checksum & 0xFF;
+
+    /* TCP source port = request destination port */
+
+    reply[34] = request[36];
+    reply[35] = request[37];
+
+    /* TCP destination port = request source port */
+
+    reply[36] = request[34];
+    reply[37] = request[35];
+
+    /* Sequence number */
+
+reply[38] = (tcp_sequence_number >> 24) & 0xFF;
+reply[39] = (tcp_sequence_number >> 16) & 0xFF;
+reply[40] = (tcp_sequence_number >> 8) & 0xFF;
+reply[41] = tcp_sequence_number & 0xFF;
+
+    /* Acknowledgment number */
+
+    reply[42] = (acknowledgment_number >> 24) & 0xFF;
+    reply[43] = (acknowledgment_number >> 16) & 0xFF;
+    reply[44] = (acknowledgment_number >> 8) & 0xFF;
+    reply[45] = acknowledgment_number & 0xFF;
+
+    /* TCP header length = 20 bytes */
+
+    reply[46] = 0x50;
+
+    /* ACK flag */
+
+    reply[47] = 0x10;
+
+    /* Window size */
+
+    reply[48] = 0xFA;
+    reply[49] = 0xF0;
+
+    /* TCP checksum */
+
+    reply[50] = 0;
+    reply[51] = 0;
+
+    unsigned short tcp_checksum =
+        calculate_tcp_checksum(
+            reply + 26,
+            reply + 30,
+            reply + 34,
+            20
+        );
+
+    reply[50] = tcp_checksum >> 8;
+    reply[51] = tcp_checksum & 0xFF;
+
+    /* Send ACK */
+
+    if (write(fd, reply, 54) < 0)
+    {
+        perror("TCP ACK send failed");
+    }
+    else
+    {
+        printf("TCP ACK sent!\n");
+    }
+}
+void send_tcp_fin_ack(
+    int fd,
+    unsigned char *request,
+    unsigned int acknowledgment_number)
+{
+    unsigned char reply[54];
+
+    memset(reply, 0, sizeof(reply));
+
+    /* Ethernet header */
+
+    memcpy(reply, request + 6, 6);
+    memcpy(reply + 6, request, 6);
+
+    reply[12] = 0x08;
+    reply[13] = 0x00;
+
+    /* IPv4 header */
+
+    reply[14] = 0x45;
+    reply[15] = 0x00;
+
+    reply[16] = 0x00;
+    reply[17] = 0x28;
+
+    reply[18] = 0x00;
+    reply[19] = 0x00;
+
+    reply[20] = 0x40;
+    reply[21] = 0x00;
+
+    reply[22] = 64;
+    reply[23] = 6;
+
+    /* Source IP */
+
+    reply[26] = 10;
+    reply[27] = 123;
+    reply[28] = 45;
+    reply[29] = 2;
+
+    /* Destination IP */
+
+    memcpy(reply + 30, request + 26, 4);
+
+    /* IPv4 checksum */
+
+    reply[24] = 0;
+    reply[25] = 0;
+
+    unsigned short ip_checksum =
+        calculate_checksum(reply + 14, 20);
+
+    reply[24] = ip_checksum >> 8;
+    reply[25] = ip_checksum & 0xFF;
+
+    /* TCP source port */
+
+    reply[34] = request[36];
+    reply[35] = request[37];
+
+    /* TCP destination port */
+
+    reply[36] = request[34];
+    reply[37] = request[35];
+
+    /* Sequence number */
+
+    reply[38] = (tcp_sequence_number >> 24) & 0xFF;
+    reply[39] = (tcp_sequence_number >> 16) & 0xFF;
+    reply[40] = (tcp_sequence_number >> 8) & 0xFF;
+    reply[41] = tcp_sequence_number & 0xFF;
+
+    /* Acknowledgment number */
+
+    reply[42] = (acknowledgment_number >> 24) & 0xFF;
+    reply[43] = (acknowledgment_number >> 16) & 0xFF;
+    reply[44] = (acknowledgment_number >> 8) & 0xFF;
+    reply[45] = acknowledgment_number & 0xFF;
+
+    /* TCP header length = 20 bytes */
+
+    reply[46] = 0x50;
+
+    /* FIN + ACK flags */
+
+    reply[47] = 0x11;
+
+    /* Window size */
+
+    reply[48] = 0xFA;
+    reply[49] = 0xF0;
+
+    /* TCP checksum */
+
+    reply[50] = 0;
+    reply[51] = 0;
+
+    unsigned short tcp_checksum =
+        calculate_tcp_checksum(
+            reply + 26,
+            reply + 30,
+            reply + 34,
+            20
+        );
+
+    reply[50] = tcp_checksum >> 8;
+    reply[51] = tcp_checksum & 0xFF;
+
+    /* Send FIN + ACK */
+
+    if (write(fd, reply, 54) < 0)
+    {
+        perror("TCP FIN-ACK send failed");
+    }
+    else
+    {
+        printf("TCP FIN-ACK sent!\n");
+    }
+}
+
+/* Send TCP SYN-ACK */
+
+void send_tcp_syn_ack(int fd, unsigned char *request)
+{
+    unsigned char reply[54];
+
+    /* Ethernet header */
+
+    memcpy(reply, request + 6, 6);
+
+    reply[12] = 0x08;
+    reply[13] = 0x00;
+
+    /* IPv4 header */
+
+    reply[14] = 0x45;
+    reply[15] = 0x00;
+
+    /* Total length = 40 bytes */
+
+    reply[16] = 0x00;
+    reply[17] = 0x28;
+
+    /* Identification */
+
+    reply[18] = 0x00;
+    reply[19] = 0x00;
+
+    /* Flags and fragment offset */
+
+    reply[20] = 0x40;
+    reply[21] = 0x00;
+
+    /* TTL */
+
+    reply[22] = 64;
+
+    /* Protocol = TCP */
+
+    reply[23] = 6;
+
+    /* IPv4 checksum initially zero */
+
+    reply[24] = 0x00;
+    reply[25] = 0x00;
+
+    /* Source IP = 10.123.45.2 */
+
+    reply[26] = 10;
+    reply[27] = 123;
+    reply[28] = 45;
+    reply[29] = 2;
+
+    /* Destination IP = client's IP */
+
+    memcpy(reply + 30, request + 26, 4);
+
+    /* Calculate IPv4 checksum */
+
+    unsigned short ip_checksum =
+        calculate_checksum(reply + 14, 20);
+
+    reply[24] = ip_checksum >> 8;
+    reply[25] = ip_checksum & 0xFF;
+
+    /* TCP header */
+
+    unsigned char *tcp = reply + 34;
+
+    /* Source port = client's destination port */
+
+    tcp[0] = request[36];
+    tcp[1] = request[37];
+
+    /* Destination port = client's source port */
+
+    tcp[2] = request[34];
+    tcp[3] = request[35];
+
+    /* Sequence number */
+
+    tcp[4] = 0x00;
+    tcp[5] = 0x00;
+    tcp[6] = 0x00;
+    tcp[7] = 0x01;
+
+    /* Get client's sequence number */
+
+    unsigned int client_seq =
+        ((unsigned int)request[38] << 24) |
+        ((unsigned int)request[39] << 16) |
+        ((unsigned int)request[40] << 8) |
+        request[41];
+
+    /* ACK number = client sequence + 1 */
+
+    unsigned int ack_number = client_seq + 1;
+
+    tcp[8] = ack_number >> 24;
+    tcp[9] = ack_number >> 16;
+    tcp[10] = ack_number >> 8;
+    tcp[11] = ack_number;
+
+    /* TCP header length = 20 bytes */
+
+    tcp[12] = 0x50;
+
+    /* SYN + ACK */
+
+    tcp[13] = 0x12;
+
+    /* Window size */
+
+    tcp[14] = 0xFA;
+    tcp[15] = 0xF0;
+
+    /* TCP checksum initially zero */
+
+    tcp[16] = 0x00;
+    tcp[17] = 0x00;
+
+    /* Urgent pointer */
+
+    tcp[18] = 0x00;
+    tcp[19] = 0x00;
+
+    /* TCP checksum */
+
+    unsigned char src_ip[4] = {10, 123, 45, 2};
+    unsigned char dst_ip[4];
+
+    memcpy(dst_ip, request + 26, 4);
+
+    unsigned short tcp_checksum =
+        calculate_tcp_checksum(
+            src_ip,
+            dst_ip,
+            tcp,
+            20
+        );
+
+    tcp[16] = tcp_checksum >> 8;
+    tcp[17] = tcp_checksum & 0xFF;
+
+    printf("\nSending TCP SYN-ACK...\n");
+
+    if (write(fd, reply, 54) < 0)
+    {
+        perror("Error sending TCP SYN-ACK");
+    }
+    else
+    {
+        printf("TCP SYN-ACK sent!\n");
+    }
+}
+
+
+/* Send ARP reply */
+
+void send_arp_reply(int fd, unsigned char *request)
+{
+    unsigned char reply[42];
+
+    unsigned char our_ip[4] = {10, 123, 45, 2};
+
+    /* Ethernet header */
+
+    memcpy(reply, request + 6, 6);
+    memcpy(reply + 6, request + 6, 6);
+
+    reply[12] = 0x08;
+    reply[13] = 0x06;
+
+    /* ARP header */
+
+    reply[14] = 0x00;
+    reply[15] = 0x01;
+
+    reply[16] = 0x08;
+    reply[17] = 0x00;
+
+    reply[18] = 6;
+    reply[19] = 4;
+
+    /* ARP reply */
+
+    reply[20] = 0x00;
+    reply[21] = 0x02;
+
+    /* Sender MAC */
+
+    memcpy(reply + 22, request + 6, 6);
+
+    /* Sender IP */
+
+    memcpy(reply + 28, our_ip, 4);
+
+    /* Target MAC */
+
+    memcpy(reply + 32, request + 6, 6);
+
+    /* Target IP */
+
+    memcpy(reply + 38, request + 28, 4);
+
+    if (write(fd, reply, 42) < 0)
+    {
+        perror("Error sending ARP reply");
+    }
+    else
+    {
+        printf("ARP Reply sent!\n");
+    }
+}
+
+
+/* Main */
+
+int main()
+{
+    int fd;
+
+    struct ifreq ifr;
+
+    char buffer[2000];
+
+    /* Open TAP device */
+
+    fd = open("/dev/net/tun", O_RDWR);
+
+    if (fd < 0)
+    {
+        perror("Error opening /dev/net/tun");
+        return 1;
+    }
+
+    /* Configure TAP */
+
+    memset(&ifr, 0, sizeof(ifr));
+
+    ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
+
+    strncpy(ifr.ifr_name, "tap0", IFNAMSIZ);
+
+    if (ioctl(fd, TUNSETIFF, (void *)&ifr) < 0)
+    {
+        perror("Error creating TAP interface");
+        close(fd);
+        return 1;
+    }
+    tcp_state = TCP_LISTEN;
+
+    printf("TCP state: LISTEN\n");
+    printf("TAP interface created: %s\n", ifr.ifr_name);
+    printf("Waiting for Ethernet frames...\n");
+
+    /* Read packets continuously */
+
+
+while (1)
+{
+    fd_set readfds;
+    struct timeval timeout;
+
+    FD_ZERO(&readfds);
+    FD_SET(fd, &readfds);
+
+    timeout.tv_sec = 1;
+    timeout.tv_usec = 0;
+
+    int ready = select(fd + 1, &readfds, NULL, NULL, &timeout);
+
+    if (ready < 0)
+    {
+        perror("select failed");
+        break;
+    }
+
+    if (ready == 0)
+    {
+        /* No packet received - check retransmission timer */
+
+        if (tcp_state == TCP_SYN_RECEIVED)
+        {
+            time_t current_time = time(NULL);
+
+            if (difftime(current_time, syn_sent_time) >= rto)
+            {
+                printf("SYN-ACK timeout!\n");
+
+                if (syn_ack_retries < 3)
+                {
+                    printf("Retransmitting SYN-ACK...\n");
+
+                    send_tcp_syn_ack(
+                        fd,
+                        syn_request
+                    );
+
+                    syn_sent_time = current_time;
+                    syn_ack_retries++;
+
+                    printf(
+                        "SYN-ACK retransmission count: %d\n",
+                        syn_ack_retries
+                    );
+                }
+                else
+                {
+                    printf("Maximum SYN-ACK retries reached\n");
+
+                    tcp_state = TCP_CLOSED;
+                }
+            }
+        }
+
+        continue;
+    }
+
+    int n = read(fd, buffer, sizeof(buffer));        if (n < 0)
+        {
+            perror("Error reading from TAP");
+            break;
+        }
+
+        printf("\nReceived Ethernet frame: %d bytes\n", n);
+
+        /* Ethernet header */
+
+        printf(
+            "Destination MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+            buffer[0] & 0xFF,
+            buffer[1] & 0xFF,
+            buffer[2] & 0xFF,
+            buffer[3] & 0xFF,
+            buffer[4] & 0xFF,
+            buffer[5] & 0xFF
+        );
+
+        printf(
+            "Source MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+            buffer[6] & 0xFF,
+            buffer[7] & 0xFF,
+            buffer[8] & 0xFF,
+            buffer[9] & 0xFF,
+            buffer[10] & 0xFF,
+            buffer[11] & 0xFF
+        );
+
+        unsigned short ethertype =
+            ((unsigned short)(buffer[12] & 0xFF) << 8) |
+            (buffer[13] & 0xFF);
+
+        printf("EtherType: 0x%04X\n", ethertype);
+
+        /* ARP */
+
+        if (ethertype == 0x0806)
+        {
+            printf("\n--- ARP Packet ---\n");
+
+            unsigned short operation =
+                ((unsigned short)(buffer[20] & 0xFF) << 8) |
+                (buffer[21] & 0xFF);
+
+            printf("ARP Operation: %d\n", operation);
+
+            if (operation == 1)
+            {
+                printf("ARP Request received\n");
+
+                printf(
+                    "Sender IP: %d.%d.%d.%d\n",
+                    buffer[28] & 0xFF,
+                    buffer[29] & 0xFF,
+                    buffer[30] & 0xFF,
+                    buffer[31] & 0xFF
+                );
+
+                printf(
+                    "Target IP: %d.%d.%d.%d\n",
+                    buffer[38] & 0xFF,
+                    buffer[39] & 0xFF,
+                    buffer[40] & 0xFF,
+                    buffer[41] & 0xFF
+                );
+
+                /* Check if ARP is for our IP */
+
+                if ((buffer[38] & 0xFF) == 10 &&
+                    (buffer[39] & 0xFF) == 123 &&
+                    (buffer[40] & 0xFF) == 45 &&
+                    (buffer[41] & 0xFF) == 2)
+                {
+                    send_arp_reply(fd, (unsigned char *)buffer);
+                }
+            }
+        }
+
+        /* IPv4 */
+
+        else if (ethertype == 0x0800)
+        {
+            printf("\n--- IPv4 Packet ---\n");
+
+            unsigned char version =
+                (buffer[14] >> 4) & 0x0F;
+
+            unsigned char ihl =
+                buffer[14] & 0x0F;
+
+            int ip_header_length = ihl * 4;
+
+            unsigned short total_length =
+                ((unsigned short)(buffer[16] & 0xFF) << 8) |
+                (buffer[17] & 0xFF);
+
+            unsigned char ttl = buffer[22];
+
+            unsigned char protocol = buffer[23];
+
+            printf(
+                "Version: %d\n",
+                version
+            );
+
+            printf(
+                "Header Length: %d bytes\n",
+                ip_header_length
+            );
+
+            printf(
+                "Total Length: %d bytes\n",
+                total_length
+            );
+
+            printf(
+                "TTL: %d\n",
+                ttl
+            );
+
+            printf(
+                "Protocol: %d\n",
+                protocol
+            );
+
+            printf(
+                "Source IP: %d.%d.%d.%d\n",
+                buffer[26] & 0xFF,
+                buffer[27] & 0xFF,
+                buffer[28] & 0xFF,
+                buffer[29] & 0xFF
+            );
+
+            printf(
+                "Destination IP: %d.%d.%d.%d\n",
+                buffer[30] & 0xFF,
+                buffer[31] & 0xFF,
+                buffer[32] & 0xFF,
+                buffer[33] & 0xFF
+            );
+
+            /* IPv4 checksum */
+
+            unsigned short ip_checksum =
+                calculate_checksum(
+                    (unsigned char *)(buffer + 14),
+                    ip_header_length
+                );
+
+            printf(
+                "Calculated Checksum: 0x%04X\n",
+                ip_checksum
+            );
+
+            if (ip_checksum == 0)
+            {
+                printf("IPv4 Checksum: VALID\n");
+            }
+            else
+            {
+                printf("IPv4 Checksum: INVALID\n");
+            }
+
+            /* ICMP */
+
+            if (protocol == 1)
+            {
+                printf("\n--- ICMP Packet ---\n");
+
+                int icmp_start =
+                    14 + ip_header_length;
+
+                unsigned char type =
+                    buffer[icmp_start];
+
+                unsigned char code =
+                    buffer[icmp_start + 1];
+
+                unsigned short checksum =
+                    ((unsigned short)(buffer[icmp_start + 2] & 0xFF) << 8) |
+                    (buffer[icmp_start + 3] & 0xFF);
+
+                printf("ICMP Type: %d\n", type);
+                printf("ICMP Code: %d\n", code);
+                printf("ICMP Checksum: 0x%04X\n", checksum);
+
+                if (type == 8)
+                {
+                    printf("ICMP Echo Request received\n");
+                }
+                else if (type == 0)
+                {
+                    printf("ICMP Echo Reply received\n");
+                }
+            }
+
+            /* UDP */
+
+            else if (protocol == 17)
+            {
+                printf("\n--- UDP Packet ---\n");
+
+                int udp_start =
+                    14 + ip_header_length;
+
+                unsigned short source_port =
+                    ((unsigned short)(buffer[udp_start] & 0xFF) << 8) |
+                    (buffer[udp_start + 1] & 0xFF);
+
+                unsigned short destination_port =
+                    ((unsigned short)(buffer[udp_start + 2] & 0xFF) << 8) |
+                    (buffer[udp_start + 3] & 0xFF);
+
+                unsigned short udp_length =
+                    ((unsigned short)(buffer[udp_start + 4] & 0xFF) << 8) |
+                    (buffer[udp_start + 5] & 0xFF);
+
+                unsigned short udp_checksum =
+                    ((unsigned short)(buffer[udp_start + 6] & 0xFF) << 8) |
+                    (buffer[udp_start + 7] & 0xFF);
+
+                printf(
+                    "Source Port: %d\n",
+                    source_port
+                );
+
+                printf(
+                    "Destination Port: %d\n",
+                    destination_port
+                );
+
+                printf(
+                    "UDP Length: %d\n",
+                    udp_length
+                );
+
+                printf(
+                    "UDP Checksum: 0x%04X\n",
+                    udp_checksum
+                );
+            }
+
+            /* TCP */
+
+            else if (protocol == 6)
+            {
+                printf("\n--- TCP Packet ---\n");
+
+                int tcp_start =
+                    14 + ip_header_length;
+
+                unsigned short source_port =
+                    ((unsigned short)(buffer[tcp_start] & 0xFF) << 8) |
+                    (buffer[tcp_start + 1] & 0xFF);
+
+                unsigned short destination_port =
+                    ((unsigned short)(buffer[tcp_start + 2] & 0xFF) << 8) |
+                    (buffer[tcp_start + 3] & 0xFF);
+
+                unsigned int sequence_number =
+                    ((unsigned int)(buffer[tcp_start + 4] & 0xFF) << 24) |
+                    ((unsigned int)(buffer[tcp_start + 5] & 0xFF) << 16) |
+                    ((unsigned int)(buffer[tcp_start + 6] & 0xFF) << 8) |
+                    (buffer[tcp_start + 7] & 0xFF);
+
+                unsigned int acknowledgment_number =
+                    ((unsigned int)(buffer[tcp_start + 8] & 0xFF) << 24) |
+                    ((unsigned int)(buffer[tcp_start + 9] & 0xFF) << 16) |
+                    ((unsigned int)(buffer[tcp_start + 10] & 0xFF) << 8) |
+                    (buffer[tcp_start + 11] & 0xFF);
+
+                unsigned char tcp_header_length =
+                    ((buffer[tcp_start + 12] >> 4) & 0x0F) * 4;
+
+                int tcp_payload_start =
+                    tcp_start + tcp_header_length;
+
+                int tcp_payload_length =
+                    total_length - ip_header_length - tcp_header_length;
+                unsigned char flags =
+                    buffer[tcp_start + 13];
+
+                unsigned short window_size =
+                    ((unsigned short)(buffer[tcp_start + 14] & 0xFF) << 8) |
+                    (buffer[tcp_start + 15] & 0xFF);
+
+                unsigned short tcp_checksum =
+                    ((unsigned short)(buffer[tcp_start + 16] & 0xFF) << 8) |
+                    (buffer[tcp_start + 17] & 0xFF);
+
+                printf(
+                    "Source Port: %d\n",
+                    source_port
+                );
+
+                printf(
+                    "Destination Port: %d\n",
+                    destination_port
+                );
+
+                printf(
+                    "Sequence Number: %u\n",
+                    sequence_number
+                );
+
+                printf(
+                    "Acknowledgment Number: %u\n",
+                    acknowledgment_number
+                );
+
+                printf(
+                    "TCP Header Length: %d bytes\n",
+                    tcp_header_length
+                );
+
+                printf(
+                    "Flags: 0x%02X\n",
+                    flags
+                );
+
+                printf(
+                    "Window Size: %d\n",
+                    window_size
+                );
+
+                printf(
+                    "Checksum: 0x%04X\n",
+                    tcp_checksum
+                );
+
+                /* SYN flag */
+if (flags & 0x02)
+{
+    printf("SYN flag set\n");
+    printf("Current TCP state: %d\n", tcp_state);
+
+    if (tcp_state == TCP_LISTEN)
+    {
+        printf("TCP state: LISTEN -> SYN-RECEIVED\n");
+
+        tcp_state = TCP_SYN_RECEIVED;
+
+        /* Store client's sequence number */
+
+        tcp_ack_number = sequence_number + 1;
+        tcp_expected_client_sequence = sequence_number + 1;
+        memcpy(syn_request, buffer, n);
+        syn_request_length = n;
+/* Send SYN-ACK */
+
+        send_tcp_syn_ack(
+    fd,
+    syn_request
+);
+tcp_sequence_number = 2;
+syn_sent_time = time(NULL);
+syn_ack_retries = 0;
+
+printf("SYN-ACK timer started\n");
+    }
+}
+
+
+if (flags & 0x10)
+{
+    printf("ACK flag set\n");
+
+    if (tcp_state == TCP_SYN_RECEIVED)
+    {
+        printf("TCP state: SYN-RECEIVED -> ESTABLISHED\n");
+
+        time_t ack_received_time = time(NULL);
+
+        rtt = difftime(ack_received_time, syn_sent_time);
+
+        rto = rtt * 2;
+
+        if (rto < 3.0)
+        {
+            rto = 3.0;
+        }
+
+        printf("RTT: %.2f seconds\n", rtt);
+        printf("RTO: %.2f seconds\n", rto);
+
+        tcp_state = TCP_ESTABLISHED;
+
+        printf("TCP connection established!\n");
+    }
+}
+
+/* TCP FIN */
+
+if (flags & 0x01)
+{
+    printf("FIN flag set\n");
+
+    if (tcp_state == TCP_ESTABLISHED)
+    {
+        printf("TCP state: ESTABLISHED -> CLOSE-WAIT\n");
+
+        /* Acknowledge peer FIN */
+
+        tcp_ack_number = sequence_number + 1;
+
+        printf(
+            "Sending FIN ACK Number: %u\n",
+            tcp_ack_number
+        );
+
+        send_tcp_ack(
+            fd,
+            (unsigned char *)buffer,
+            tcp_ack_number
+        );
+
+        /* Send our FIN */
+
+        printf("Sending our FIN...\n");
+
+        send_tcp_fin_ack(
+            fd,
+            (unsigned char *)buffer,
+            tcp_ack_number
+        );
+
+        tcp_sequence_number++;
+
+        tcp_state = TCP_LAST_ACK;
+
+        printf("TCP state: CLOSE-WAIT -> LAST-ACK\n");
+    }
+}
+
+/* Final ACK */
+
+if (tcp_state == TCP_LAST_ACK &&
+    (flags & 0x10))
+{
+    printf("Final ACK received\n");
+
+    tcp_state = TCP_CLOSED;
+
+    printf("TCP state: LAST-ACK -> CLOSED\n");
+}
+/* TCP data */
+
+if (tcp_state == TCP_ESTABLISHED &&
+    tcp_payload_length > 0)
+{
+    printf("\n--- TCP DATA ---\n");
+    printf("Payload Length: %d bytes\n", tcp_payload_length);
+    printf("Client Sequence Number: %u\n", sequence_number);
+    printf("Expected Sequence Number: %u\n",
+           tcp_expected_client_sequence);
+
+    if (sequence_number == tcp_expected_client_sequence)
+    {
+        printf("Data: ");
+
+        for (int i = 0; i < tcp_payload_length; i++)
+        {
+            unsigned char c = buffer[tcp_payload_start + i];
+
+            if (c >= 32 && c <= 126)
+                printf("%c", c);
+            else
+                printf(".");
+        }
+
+        printf("\n");
+
+        tcp_expected_client_sequence += tcp_payload_length;
+    }
+    else
+    {
+        printf("Duplicate or out-of-order TCP data received\n");
+    }
+
+    tcp_ack_number = tcp_expected_client_sequence;
+
+    printf("Sending ACK Number: %u\n", tcp_ack_number);
+
+    send_tcp_ack(
+        fd,
+        (unsigned char *)buffer,
+        tcp_ack_number
+    );
+}
+                /* RST flag */
+                if (flags & 0x04)
+                {
+                    printf("RST flag set\n");
+                }
+            }
+        }
+        else if (ethertype == 0x86DD)
+        {
+            printf("IPv6 packet received - ignored for now\n");
+        }
+        else
+        {
+            printf("Unknown EtherType\n");
+        }
+    }
+
+    close(fd);
+    return 0;
+}
+
+===== BUILD FILES =====

@@ -1,0 +1,2188 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StackScope – Custom TCP/IP Packet Analyzer</title>
+  <style>
+    :root {
+      --bg: #050913;
+      --bg2: #0a1120;
+      --panel: #0d1628;
+      --panel2: #111d35;
+      --line: #1a2a47;
+      --tx: #dce6f7;
+      --mut: #7d8fb0;
+      --cy: #22d3ee;
+      --bl: #3b82f6;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --bad: #f87171;
+      --mono: "Cascadia Mono", "JetBrains Mono", Consolas, "SF Mono", monospace;
+      --sans: "Segoe UI", Inter, system-ui, sans-serif
+    }
+
+    * {
+      box-sizing: border-box
+    }
+
+    html,
+    body {
+      margin: 0;
+      height: 100%
+    }
+
+    body {
+      background: radial-gradient(900px 500px at 85% -10%, #0d2447 0, transparent 60%), var(--bg);
+      color: var(--tx);
+      font: 14px/1.5 var(--sans)
+    }
+
+    svg {
+      width: 18px;
+      height: 18px;
+      flex: none
+    }
+
+    code {
+      font-family: var(--mono);
+      background: var(--panel2);
+      padding: 1px 5px;
+      border-radius: 4px
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 230px 1fr;
+      min-height: 100%
+    }
+
+    .sidebar {
+      background: var(--bg2);
+      border-right: 1px solid var(--line);
+      padding: 18px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+      position: sticky;
+      top: 0;
+      height: 100vh
+    }
+
+    .brand {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      padding: 0 6px
+    }
+
+    .brand small {
+      display: block;
+      color: var(--mut);
+      font-size: 11px
+    }
+
+    .logo {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      color: #03121c;
+      background: linear-gradient(135deg, var(--cy), var(--bl))
+    }
+
+    nav {
+      display: flex;
+      flex-direction: column;
+      gap: 3px
+    }
+
+    nav a {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      padding: 9px 12px;
+      border-radius: 8px;
+      color: var(--mut);
+      text-decoration: none
+    }
+
+    nav a:hover {
+      background: var(--panel);
+      color: var(--tx)
+    }
+
+    nav a.active {
+      background: linear-gradient(90deg, #0f2d4d, #0d1b33);
+      color: var(--cy);
+      box-shadow: inset 2px 0 var(--cy)
+    }
+
+    .side-foot {
+      margin-top: auto;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      color: var(--mut);
+      font-size: 12px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #52627f;
+      flex: none
+    }
+
+    .dot.connecting {
+      background: var(--warn);
+      animation: pulse 1s infinite
+    }
+
+    .dot.connected {
+      background: var(--ok)
+    }
+
+    .dot.error {
+      background: var(--bad)
+    }
+
+    main {
+      padding: 22px 26px 40px;
+      min-width: 0
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px
+    }
+
+    h1 {
+      font-size: 22px;
+      margin: 0
+    }
+
+    h2 {
+      font-size: 14px;
+      margin: 0 0 12px;
+      color: var(--cy);
+      font-weight: 600
+    }
+
+    .pill {
+      font-size: 12px;
+      color: var(--mut);
+      border: 1px solid var(--line);
+      padding: 3px 10px;
+      border-radius: 99px
+    }
+
+    .banner {
+      display: none;
+      gap: 12px;
+      align-items: center;
+      padding: 12px 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      margin-bottom: 16px;
+    }
+
+    .banner.error {
+      display: flex;
+      border-color: #5b2330;
+      background: #1c0f18;
+    }
+
+    .banner.hide {
+      display: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      border: 0 !important;
+    }
+
+    .banner.idle svg {
+      color: var(--cy)
+    }
+
+    .banner.error {
+      border-color: #5b2330;
+      background: #1c0f18
+    }
+
+    .banner.error svg {
+      color: var(--bad)
+    }
+
+    .banner .btn {
+      margin-left: auto
+    }
+
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid var(--line);
+      border-top-color: var(--cy);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+      flex: none
+    }
+
+    .view {
+      display: none;
+      flex-direction: column;
+      gap: 16px
+    }
+
+    .view.active {
+      display: flex
+    }
+
+    .grid2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      min-width: 0
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px
+    }
+
+    .stat {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      border-top: 2px solid var(--bl)
+    }
+
+    .stat label {
+      color: var(--mut);
+      font-size: 12px
+    }
+
+    .stat .v {
+      font-size: 26px;
+      font-weight: 600;
+      font-family: var(--mono);
+      margin-top: 2px
+    }
+
+    .stat .v.txt {
+      font-size: 15px;
+      font-family: var(--sans);
+      line-height: 1.4;
+      padding: 6px 0
+    }
+
+    .stat small {
+      color: var(--mut);
+      font-size: 11px
+    }
+
+    .stat.cy {
+      border-top-color: var(--cy)
+    }
+
+    .skeleton {
+      color: transparent !important;
+      background: linear-gradient(90deg, var(--panel2), #1a2c4d, var(--panel2));
+      background-size: 200% 100%;
+      animation: shimmer 1.2s infinite;
+      border-radius: 6px
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 12px
+    }
+
+    input[type=search],
+    input[type=text],
+    input[type=number] {
+      background: var(--bg2);
+      border: 1px solid var(--line);
+      color: var(--tx);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font: inherit
+    }
+
+    input:focus,
+    button:focus-visible,
+    a:focus-visible {
+      outline: 2px solid var(--cy);
+      outline-offset: 1px
+    }
+
+    #search {
+      flex: 1;
+      min-width: 200px
+    }
+
+    .chips {
+      display: flex;
+      gap: 6px
+    }
+
+    .chip {
+      background: var(--bg2);
+      border: 1px solid var(--line);
+      color: var(--mut);
+      padding: 6px 14px;
+      border-radius: 99px;
+      cursor: pointer;
+      font: inherit
+    }
+
+    .chip[aria-pressed=true] {
+      background: #0e3a55;
+      border-color: var(--cy);
+      color: var(--cy)
+    }
+
+    .follow {
+      color: var(--mut);
+      font-size: 13px;
+      display: flex;
+      gap: 6px;
+      align-items: center
+    }
+
+    .btn {
+      display: inline-flex;
+      gap: 7px;
+      align-items: center;
+      background: var(--panel2);
+      border: 1px solid var(--line);
+      color: var(--tx);
+      padding: 8px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      font: inherit
+    }
+
+    .btn:hover {
+      border-color: var(--bl)
+    }
+
+    .btn.primary {
+      background: linear-gradient(135deg, var(--cy), var(--bl));
+      color: #03121c;
+      border: 0;
+      font-weight: 600
+    }
+
+    .btn.danger:hover {
+      border-color: var(--bad);
+      color: var(--bad)
+    }
+
+    .btn svg {
+      width: 15px;
+      height: 15px
+    }
+
+    .table-wrap {
+      height: 320px;
+      max-height: 320px;
+      overflow-y: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      position: relative;
+    }
+
+    [data-slot="inspector"], [data-slot="structure"] {
+      min-height: 180px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--mono);
+      font-size: 12.5px
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      background: var(--panel2);
+      text-align: left;
+      padding: 8px 10px;
+      color: var(--mut);
+      font-family: var(--sans);
+      font-weight: 600;
+      z-index: 1;
+      white-space: nowrap
+    }
+
+    td {
+      padding: 5px 10px;
+      border-top: 1px solid #121f38;
+      white-space: nowrap;
+      max-width: 420px;
+      overflow: hidden;
+      text-overflow: ellipsis
+    }
+
+    tbody tr {
+      cursor: pointer
+    }
+
+    tbody tr:hover {
+      background: #0f2038
+    }
+
+    tbody tr.sel {
+      background: #0e3354;
+      box-shadow: inset 2px 0 var(--cy)
+    }
+
+    tr.p-TCP td:nth-child(5) {
+      color: var(--cy)
+    }
+
+    tr.p-ARP td:nth-child(5) {
+      color: var(--warn)
+    }
+
+    tr.p-IPv4 td:nth-child(5) {
+      color: var(--bl)
+    }
+
+    .empty {
+      padding: 36px 16px;
+      text-align: center;
+      color: var(--mut)
+    }
+
+    .empty svg {
+      width: 28px;
+      height: 28px;
+      color: var(--cy);
+      display: block;
+      margin: 0 auto 8px
+    }
+
+    .muted {
+      color: var(--mut)
+    }
+
+    .small {
+      font-size: 12px;
+      margin-top: 8px
+    }
+
+    .na {
+      color: #5d6f93;
+      font-style: italic
+    }
+
+    .flow {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: stretch
+    }
+
+    .step {
+      flex: 1;
+      min-width: 92px;
+      border: 1px dashed #2a3c60;
+      border-radius: 10px;
+      padding: 10px;
+      text-align: center;
+      color: var(--mut)
+    }
+
+    .step b {
+      display: block;
+      color: inherit;
+      font-size: 13px
+    }
+
+    .step small {
+      font-size: 11px
+    }
+
+    .step.on {
+      border: 1px solid var(--cy);
+      color: var(--cy);
+      background: #0a2236
+    }
+
+    .step.close.on {
+      border-color: var(--warn);
+      color: var(--warn);
+      background: #2a2008
+    }
+
+    .arrow {
+      align-self: center;
+      color: #35507d
+    }
+
+    .flowmeta {
+      margin-top: 12px;
+      color: var(--mut);
+      font-size: 12px
+    }
+
+    .timeline {
+      max-height: 300px;
+      overflow: auto;
+      border-left: 2px solid var(--line);
+      margin-left: 6px;
+      padding-left: 14px
+    }
+
+    .tl {
+      position: relative;
+      padding: 4px 0;
+      font-size: 12.5px;
+      display: flex;
+      gap: 8px;
+      align-items: baseline;
+      flex-wrap: wrap
+    }
+
+    .tl:before {
+      content: "";
+      position: absolute;
+      left: -20px;
+      top: 11px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--bl)
+    }
+
+    .tl.TCP:before {
+      background: var(--cy)
+    }
+
+    .tl.ARP:before {
+      background: var(--warn)
+    }
+
+    .tl time {
+      font-family: var(--mono);
+      color: var(--mut)
+    }
+
+    .tl .info {
+      font-family: var(--mono);
+      color: var(--tx)
+    }
+
+    .badge {
+      font-size: 11px;
+      padding: 1px 8px;
+      border-radius: 99px;
+      border: 1px solid var(--line);
+      color: var(--mut)
+    }
+
+    .badge.on {
+      color: var(--cy);
+      border-color: var(--cy);
+      background: #0a2236
+    }
+
+    .badge.ok {
+      color: var(--ok);
+      border-color: #1d6b52
+    }
+
+    .badge.bad {
+      color: var(--bad);
+      border-color: #7a2f38
+    }
+
+    .sum {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px
+    }
+
+    .sum div {
+      background: var(--bg2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px
+    }
+
+    .sum label {
+      display: block;
+      color: var(--mut);
+      font-size: 11px
+    }
+
+    .sum span {
+      font-family: var(--mono);
+      word-break: break-all
+    }
+
+    .flags {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      margin-bottom: 14px
+    }
+
+    .layer {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      margin-bottom: 12px;
+      overflow: hidden
+    }
+
+    .layer>header {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: var(--panel2);
+      font-weight: 600
+    }
+
+    .layer>header small {
+      color: var(--mut);
+      font-weight: 400
+    }
+
+    .fields {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1px;
+      background: var(--line)
+    }
+
+    .f {
+      flex: var(--w, 1) 1 130px;
+      background: var(--bg2);
+      padding: 7px 10px;
+      min-width: 0
+    }
+
+    .f label {
+      display: block;
+      font-size: 11px;
+      color: var(--mut)
+    }
+
+    .f span {
+      font-family: var(--mono);
+      font-size: 12.5px;
+      word-break: break-all
+    }
+
+    .f em {
+      font-style: normal;
+      color: #587099;
+      font-size: 10.5px;
+      display: block
+    }
+
+    .l-eth>header {
+      border-left: 3px solid #6366f1
+    }
+
+    .l-ip>header {
+      border-left: 3px solid var(--bl)
+    }
+
+    .l-tcp>header {
+      border-left: 3px solid var(--cy)
+    }
+
+    .l-pay>header {
+      border-left: 3px solid var(--ok)
+    }
+
+    .l-arp>header {
+      border-left: 3px solid var(--warn)
+    }
+
+    .l-absent {
+      opacity: .55;
+      border-style: dashed
+    }
+
+    .l-absent .fields {
+      display: none
+    }
+
+    .stack {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch
+    }
+
+    .link {
+      text-align: center;
+      color: #35507d;
+      line-height: 1;
+      margin: -4px 0 6px
+    }
+
+    .dumps {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      padding: 12px
+    }
+
+    pre {
+      margin: 0;
+      background: #040810;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      overflow: auto;
+      max-height: 240px;
+      font: 12px/1.5 var(--mono);
+      white-space: pre-wrap;
+      word-break: break-all
+    }
+
+    .dumps h4 {
+      margin: 0 0 6px;
+      font-size: 12px;
+      color: var(--mut);
+      font-weight: 600
+    }
+
+    .form {
+      display: grid;
+      gap: 12px;
+      max-width: 520px;
+      margin-bottom: 14px
+    }
+
+    .form label {
+      display: grid;
+      gap: 5px;
+      color: var(--mut);
+      font-size: 12px
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg)
+      }
+    }
+
+    @keyframes pulse {
+      50% {
+        opacity: .35
+      }
+    }
+
+    @keyframes shimmer {
+      to {
+        background-position: -200% 0
+      }
+    }
+
+    @media(prefers-reduced-motion:reduce) {
+      * {
+        animation: none !important
+      }
+    }
+
+    @media(max-width:980px) {
+
+      .grid2,
+      .dumps {
+        grid-template-columns: 1fr
+      }
+    }
+
+    @media(max-width:760px) {
+      .app {
+        grid-template-columns: 1fr
+      }
+
+      .sidebar {
+        height: auto;
+        position: static;
+        flex-direction: row;
+        align-items: center;
+        padding: 10px;
+        overflow-x: auto
+      }
+
+      .brand small,
+      .side-foot,
+      nav a span {
+        display: none
+      }
+
+      nav {
+        flex-direction: row
+      }
+
+      main {
+        padding: 14px
+      }
+    }
+
+    /* ---- v2 visual refresh ---- */
+    :root {
+      --bg: #03050b;
+      --bg2: #070c18;
+      --panel: #0a1121;
+      --panel2: #0f1830;
+      --line: #16233f;
+      --vi: #8b5cf6
+    }
+
+    body {
+      background: radial-gradient(1000px 520px at 90% -10%, #0f2a5a66, transparent 60%), radial-gradient(800px 520px at -10% 110%, #2a1a6a44, transparent 60%), var(--bg)
+    }
+
+    .sidebar {
+      background: linear-gradient(180deg, #060b17, #04070f)
+    }
+
+    .logo {
+      box-shadow: 0 0 20px #22d3ee66
+    }
+
+    h1 {
+      font-size: 24px;
+      letter-spacing: .2px;
+      background: linear-gradient(90deg, #fff, #7fe7ff);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent
+    }
+
+    h2 {
+      color: #9fb4d8;
+      font-size: 13px;
+      letter-spacing: .3px
+    }
+
+    .card {
+      background: linear-gradient(180deg, #0b1426, #080e1c);
+      box-shadow: 0 10px 30px #0009, inset 0 1px #ffffff0a
+    }
+
+    nav a.active {
+      box-shadow: inset 3px 0 var(--cy), 0 0 18px #22d3ee1a
+    }
+
+    .stats {
+      grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+      gap: 14px
+    }
+
+    .stat {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      padding: 16px;
+      background: linear-gradient(135deg, color-mix(in srgb, var(--ac) 16%, #0a1121), #0a1121 62%)
+    }
+
+    .stat:before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: var(--ac);
+      box-shadow: 0 0 16px var(--ac)
+    }
+
+    .ico {
+      width: 42px;
+      height: 42px;
+      border-radius: 11px;
+      display: grid;
+      place-items: center;
+      flex: none;
+      color: var(--ac);
+      background: color-mix(in srgb, var(--ac) 16%, transparent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--ac) 35%, transparent)
+    }
+
+    .ico svg {
+      width: 21px;
+      height: 21px
+    }
+
+    .sbody {
+      min-width: 0
+    }
+
+    .stat .v {
+      font-size: 30px;
+      line-height: 1.1;
+      margin-top: 1px
+    }
+
+    .stat .v.txt {
+      font-size: 15px;
+      font-family: var(--sans);
+      font-weight: 600;
+      padding: 2px 0;
+      line-height: 1.3
+    }
+
+    .dist {
+      display: flex;
+      height: 14px;
+      border-radius: 99px;
+      overflow: hidden;
+      background: #0d1730;
+      border: 1px solid var(--line)
+    }
+
+    .dist i {
+      display: block;
+      height: 100%
+    }
+
+    .lg {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+      font-size: 12.5px;
+      color: var(--mut)
+    }
+
+    .lg b {
+      color: var(--tx);
+      font-family: var(--mono)
+    }
+
+    .lg span:before {
+      content: "";
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      border-radius: 3px;
+      background: var(--c);
+      margin-right: 7px
+    }
+
+    .step.on {
+      box-shadow: 0 0 18px #22d3ee33
+    }
+
+    .step.close.on {
+      box-shadow: 0 0 18px #fbbf2433
+    }
+
+    .banner {
+      background: linear-gradient(90deg, #0b1a33, #0a1121)
+    }
+
+    tbody tr:hover {
+      background: #0f2140
+    }
+
+    ::-webkit-scrollbar {
+      width: 10px;
+      height: 10px
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #1c2c4d;
+      border-radius: 8px
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent
+    }
+
+    /* ---- v3: black analyzer theme ---- */
+    :root {
+      --bg: #09090b;
+      --bg2: #0d0d10;
+      --panel: #101013;
+      --panel2: #16161a;
+      --line: #212126;
+      --tx: #ededf0;
+      --mut: #8d8d98;
+      --mono: "Space Mono", "JetBrains Mono", "Cascadia Mono", Consolas, monospace
+    }
+
+    body {
+      background: var(--bg)
+    }
+
+    .sidebar {
+      display: none
+    }
+
+    .app {
+      display: block
+    }
+
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 26px 24px 50px
+    }
+
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 18px
+    }
+
+    h1 {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      font-family: var(--mono);
+      font-size: 26px;
+      margin: 0;
+      background: none;
+      color: #fff;
+      -webkit-text-fill-color: #fff
+    }
+
+    h1 svg {
+      width: 26px;
+      height: 26px
+    }
+
+    .top p {
+      margin: 4px 0 0
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap
+    }
+
+    .btn {
+      background: #0c0c0f;
+      border-color: #2a2a30;
+      font-size: 13px;
+      padding: 7px 12px
+    }
+
+    .btn:hover {
+      border-color: #555
+    }
+
+    .card,
+    .stat,
+    .sc {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: none
+    }
+
+    h2 {
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 14px
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 14px;
+      margin-bottom: 14px
+    }
+
+    .sc {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      padding: 18px;
+      min-height: 104px
+    }
+
+    .sc label {
+      font-size: 13px;
+      color: var(--mut)
+    }
+
+    .sc .v {
+      font-family: var(--mono);
+      font-size: 26px;
+      font-weight: 700;
+      margin-top: 10px
+    }
+
+    .sc small {
+      display: block;
+      color: #6b6b75;
+      font-size: 11px;
+      margin-top: 2px
+    }
+
+    .sc>svg {
+      width: 22px;
+      height: 22px
+    }
+
+    .row2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 14px
+    }
+
+    .rings {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px
+    }
+
+    .ringbox {
+      text-align: center
+    }
+
+    .ring {
+      width: 130px;
+      height: 130px
+    }
+
+    .rbg {
+      fill: none;
+      stroke: #1b1b20;
+      stroke-width: 7
+    }
+
+    .rfg {
+      fill: none;
+      stroke-width: 7;
+      stroke-linecap: round
+    }
+
+    .rt {
+      fill: #fff;
+      font: 700 15px var(--mono);
+      text-anchor: middle
+    }
+
+    .rs {
+      fill: #8d8d98;
+      font: 9px var(--sans);
+      text-anchor: middle
+    }
+
+    .mini {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 10px;
+      margin-bottom: 18px
+    }
+
+    .mini div {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 14px
+    }
+
+    .mini label {
+      display: block;
+      font-size: 11px;
+      color: var(--mut)
+    }
+
+    .mini b {
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 700
+    }
+
+    .chips {
+      flex-wrap: wrap;
+      margin-bottom: 10px
+    }
+
+    .chip {
+      font-family: var(--mono);
+      font-size: 12px;
+      border-radius: 7px;
+      padding: 5px 12px;
+      background: #0d0d10
+    }
+
+    .chip.c-tcp {
+      color: #60a5fa;
+      border-color: #1e3a66
+    }
+
+    .chip.c-udp {
+      color: #a78bfa;
+      border-color: #3b2a6b
+    }
+
+    .chip.c-icmp {
+      color: #22d3ee;
+      border-color: #134e5e
+    }
+
+    .chip.c-arp {
+      color: #fbbf24;
+      border-color: #5b4513
+    }
+
+    .chip.c-ip {
+      color: #34d399;
+      border-color: #14533d
+    }
+
+    .chip[aria-pressed=true] {
+      background: #1a1a20;
+      border-color: currentColor;
+      box-shadow: 0 0 0 1px currentColor inset
+    }
+
+    nav.tabs {
+      display: inline-flex;
+      flex-direction: row;
+      gap: 2px;
+      background: #111114;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 4px;
+      margin-bottom: 16px
+    }
+
+    nav.tabs a {
+      padding: 8px 22px;
+      border-radius: 9px;
+      color: #c9c9d2
+    }
+
+    nav.tabs a.active {
+      background: #000;
+      color: #fff;
+      box-shadow: none
+    }
+
+    nav.tabs a:hover {
+      background: #17171b
+    }
+
+    .grid3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px
+    }
+
+    .lrow {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      padding: 6px 0;
+      font-family: var(--mono);
+      font-size: 13px
+    }
+
+    .lrow .muted {
+      margin-left: auto;
+      font-size: 12px
+    }
+
+    .idx {
+      width: 20px;
+      height: 20px;
+      border: 1px solid #333;
+      border-radius: 5px;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      color: #bbb
+    }
+
+    .ipc {
+      color: #22d3ee
+    }
+
+    .big {
+      font: 700 40px var(--mono);
+      color: #fb923c
+    }
+
+    .bar {
+      height: 7px;
+      border-radius: 9px;
+      background: #26262b;
+      margin: 9px 0;
+      overflow: hidden
+    }
+
+    .bar i {
+      display: block;
+      height: 100%;
+      background: #f2f2f5;
+      border-radius: 9px
+    }
+
+    .mrow,
+    .drow>div:first-child {
+      display: flex;
+      justify-content: space-between;
+      padding: 5px 0;
+      font-size: 13px
+    }
+
+    .mrow b {
+      font-family: var(--mono)
+    }
+
+    .drow {
+      margin-bottom: 8px
+    }
+
+    .chart {
+      width: 100%;
+      height: 150px
+    }
+
+    .axis {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--mut)
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 22px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: #1b1b20;
+      border: 1px solid #333;
+      padding: 9px 16px;
+      border-radius: 10px;
+      opacity: 0;
+      pointer-events: none;
+      transition: .2s;
+      font-size: 13px
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%)
+    }
+
+    .banner {
+      background: #101013
+    }
+
+    .step.on {
+      background: #0d1c33
+    }
+
+    @media(max-width:900px) {
+
+      .row2,
+      .grid3 {
+        grid-template-columns: 1fr
+      }
+
+      .rings {
+        grid-template-columns: 1fr 1fr
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-dash" viewBox="0 0 24 24">
+      <path d="M3 3h8v10H3zM13 3h8v6h-8zM13 11h8v10h-8zM3 15h8v6H3z" fill="none" stroke="currentColor"
+        stroke-width="1.8" stroke-linejoin="round" />
+    </symbol>
+    <symbol id="i-list" viewBox="0 0 24 24">
+      <path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+    </symbol>
+    <symbol id="i-flow" viewBox="0 0 24 24">
+      <path d="M5 5v14M19 5v14M5 8h14M19 12H5M5 16h14" fill="none" stroke="currentColor" stroke-width="1.8"
+        stroke-linecap="round" />
+    </symbol>
+    <symbol id="i-inspect" viewBox="0 0 24 24">
+      <circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="1.8" />
+      <path d="m15 15 6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+    </symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8" />
+      <path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2" stroke="currentColor"
+        stroke-width="1.8" stroke-linecap="round" />
+    </symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24">
+      <path d="M12 3 2 20h20zM12 10v4m0 3v.01" fill="none" stroke="currentColor" stroke-width="1.8"
+        stroke-linejoin="round" stroke-linecap="round" />
+    </symbol>
+    <symbol id="i-wait" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8" />
+      <path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+    </symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24">
+      <path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="1.8"
+        stroke-linejoin="round" />
+    </symbol>
+    <symbol id="i-box" viewBox="0 0 24 24">
+      <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9zM12 12l8-4.5M12 12v9M12 12 4 7.5" fill="none" stroke="currentColor"
+        stroke-width="1.8" stroke-linejoin="round" />
+    </symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8" />
+      <path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" fill="none" stroke="currentColor" stroke-width="1.6" />
+    </symbol>
+    <symbol id="i-swap" viewBox="0 0 24 24">
+      <path d="M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4m4 4H7" fill="none" stroke="currentColor" stroke-width="1.8"
+        stroke-linecap="round" stroke-linejoin="round" />
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8" />
+      <path d="m8 12 3 3 5-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+        stroke-linejoin="round" />
+    </symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24">
+      <path d="M3 12h4l2-6 4 12 2-6h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+        stroke-linejoin="round" />
+    </symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24">
+      <path d="M9 3v5M15 3v5M6 8h12v4a6 6 0 0 1-12 0zM12 18v3" fill="none" stroke="currentColor" stroke-width="1.8"
+        stroke-linecap="round" stroke-linejoin="round" />
+    </symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24">
+      <path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="none" stroke="currentColor" stroke-width="1.8"
+        stroke-linejoin="round" />
+    </symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24">
+      <path d="M8 5v14M16 5v14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+    </symbol>
+    <symbol id="i-export" viewBox="0 0 24 24">
+      <path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14" fill="none" stroke="currentColor" stroke-width="1.8"
+        stroke-linecap="round" stroke-linejoin="round" />
+    </symbol>
+  </svg>
+  <div class="app">
+    <main>
+      <header class="top">
+        <div>
+          <h1><svg>
+              <use href="#i-pulse" />
+            </svg>StackScope</h1>
+          <p class="muted">Real-time packet monitoring and analysis · custom TCP/IP stack on <span
+              data-bind="ifaceName">tap0</span></p>
+        </div>
+        <div class="actions">
+          <span class="pill" data-bind="backendPill">Backend: not connected</span>
+          <button class="btn primary" id="runTestBtn" style="border:0;" title="Run Reno Congestion Control & 3-Way Handshake Test on C Stack"><svg>
+              <use href="#i-bolt" />
+            </svg><span>Run Reno Self-Test</span></button>
+          <button class="btn" id="pauseBtn"><svg>
+              <use href="#i-pause" />
+            </svg><span>Pause</span></button>
+          <button class="btn" id="clearBtn"><svg>
+              <use href="#i-trash" />
+            </svg>Clear</button>
+          <button class="btn" id="exportBtn"><svg>
+              <use href="#i-export" />
+            </svg>Export</button>
+        </div>
+      </header>
+      <div id="banner" class="banner hide" role="status"></div>
+      <div class="stats" id="stats"></div>
+      <div class="row2">
+        <div class="rings" id="rings"></div>
+        <article class="card">
+          <h2>Protocol Filters</h2>
+          <div class="chips" id="chips">
+            <button class="chip c-tcp" data-proto="TCP" aria-pressed="false">TCP</button>
+            <button class="chip c-udp" data-proto="UDP" aria-pressed="false">UDP</button>
+            <button class="chip c-icmp" data-proto="ICMP" aria-pressed="false">ICMP</button>
+            <button class="chip c-arp" data-proto="ARP" aria-pressed="false">ARP</button>
+            <button class="chip c-ip" data-proto="IPv4" aria-pressed="false">IPv4</button>
+          </div>
+          <div class="muted small">No filter selected shows every captured packet.</div>
+        </article>
+      </div>
+      <div class="mini" id="mini"></div>
+      <nav id="nav" class="tabs">
+        <a href="#live" data-view="live">Live Stream</a><a href="#stats" data-view="stats">Statistics</a>
+        <a href="#conns" data-view="conns">Connections</a><a href="#settings" data-view="settings">Settings</a>
+      </nav>
+
+      <section class="view" id="view-live">
+        <article class="card">
+          <div class="toolbar">
+            <input id="search" type="search" placeholder="Search no., IP, protocol, info…" aria-label="Search packets">
+            <label class="follow"><input type="checkbox" id="follow" checked> Follow latest</label>
+          </div>
+          <div class="table-wrap" id="tableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>No.</th>
+                  <th>Time</th>
+                  <th>Source IP</th>
+                  <th>Destination IP</th>
+                  <th>Protocol</th>
+                  <th>Length</th>
+                  <th>Info</th>
+                </tr>
+              </thead>
+              <tbody id="rows"></tbody>
+            </table>
+            <div class="empty" id="tableEmpty"></div>
+          </div>
+          <div class="muted small" id="tableNote"></div>
+        </article>
+        <article class="card">
+          <h2>Packet Inspector</h2>
+          <div data-slot="inspector"></div>
+        </article>
+        <article class="card">
+          <h2>Packet Structure</h2>
+          <div data-slot="structure"></div>
+        </article>
+      </section>
+
+      <section class="view" id="view-stats">
+        <div class="grid3">
+          <article class="card">
+            <h2>Capture Health</h2>
+            <div data-slot="health"></div>
+          </article>
+          <article class="card">
+            <h2>Top Traffic Sources</h2>
+            <div data-slot="srcs"></div>
+          </article>
+          <article class="card">
+            <h2>Top Destination Ports</h2>
+            <div data-slot="ports"></div>
+          </article>
+        </div>
+        <div class="grid2">
+          <article class="card">
+            <h2>Traffic Metrics</h2>
+            <div data-slot="metrics"></div>
+          </article>
+          <article class="card">
+            <h2>Protocol Distribution</h2>
+            <div data-slot="dist"></div>
+          </article>
+        </div>
+        <article class="card">
+          <h2>Traffic Intensity (last 60 s)</h2>
+          <div data-slot="intensity"></div>
+        </article>
+      </section>
+
+      <section class="view" id="view-conns">
+        <article class="card">
+          <h2>TCP Connection Flow</h2>
+          <div data-slot="flow"></div>
+        </article>
+        <article class="card">
+          <h2>TCP Connections Observed</h2>
+          <div data-slot="conns"></div>
+        </article>
+        <article class="card">
+          <h2>Packet Timeline</h2>
+          <div data-slot="timeline"></div>
+        </article>
+      </section>
+
+      <!-- Settings -->
+      <section class="view" id="view-settings">
+        <article class="card">
+          <h2>Connection</h2>
+          <div class="form">
+            <label>Backend URL<input id="cfgUrl" type="text" spellcheck="false"></label>
+            <label>Interface name<input id="cfgIface" type="text" spellcheck="false"></label>
+            <label>Max packets kept in browser<input id="cfgMax" type="number" min="100" max="50000"></label>
+          </div>
+          <div class="row">
+            <button class="btn primary" id="saveCfg">Save</button>
+            <button class="btn" id="connectBtn">Test backend connection</button>
+          </div>
+          <p class="muted small" id="cfgMsg">No backend exists yet. The connection test checks whether the URL answers
+            at <code>/api/status</code>; it never produces packet data.</p>
+        </article>
+        <article class="card">
+          <h2>Preview interface states</h2>
+          <p class="muted small">Changes only the status banner. No packets are created.</p>
+          <div class="row">
+            <button class="btn" data-preview="idle">Waiting</button>
+            <button class="btn" data-preview="connecting">Loading</button>
+            <button class="btn" data-preview="error">Error</button>
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script>/* StackScope frontend.
+* Shows ONLY packets handed to StackScope.ingestPacket(). No packet is ever generated here.
+*
+* Packet object contract (proposed for the future Flask backend; every field except
+* `no`/`time`/`protocol` is optional, and missing values render as "Data unavailable"):
+* { no, time epoch-seconds, src, dst, protocol: "TCP"|"IPv4"|"ARP"|..., length, info,
+*   direction: "RX"|"TX", conn: "<connection key>",
+*   ethernet:{dst,src,type,headerLen}, ipv4:{version,ihl,tos,totalLength,id,flags,fragOffset,ttl,
+*   protocol,checksum,checksumStatus,src,dst,headerLen}, arp:{opcode,senderMac,senderIp,targetMac,targetIp},
+*   tcp:{srcPort,dstPort,seq,ack,dataOffset,flags:["SYN","ACK"..],window,checksum,checksumStatus,
+*   urgent,options,headerLen,payloadLen}, payload:{hex,size} }
+*/
+    (() => {
+      'use strict';
+
+      /* ---------- config & state ---------- */
+      const getDefUrl = () => {
+        if (typeof window !== 'undefined' && window.location && window.location.origin && window.location.origin.startsWith('http')) {
+          return window.location.origin;
+        }
+        return 'http://localhost:8080';
+      };
+      const DEFAULTS = { backendUrl: getDefUrl(), iface: 'CustomProto (Kernel TCP Bypass)', maxPackets: 5000 };
+      const loadCfg = () => {
+        try {
+          const saved = JSON.parse(localStorage.getItem('stackscope.cfg') || '{}');
+          if (saved.backendUrl && saved.backendUrl.includes('5000')) {
+            saved.backendUrl = getDefUrl();
+          }
+          return { ...DEFAULTS, ...saved };
+        } catch { return { ...DEFAULTS }; }
+      };
+      const state = {
+        cfg: loadCfg(), packets: [], selected: null, query: '', protos: new Set(),
+        backend: { status: 'idle', message: 'Backend not connected yet.' },
+        iface: 'unknown', connLabel: null, view: 'dashboard', t0: null,
+      };
+
+      /* ---------- helpers ---------- */
+      const $ = (s, r = document) => r.querySelector(s);
+      const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+      const esc = v => String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      const has = v => v !== undefined && v !== null && v !== '';
+      const NA = '<span class="na">Data unavailable</span>';
+      const sizeLabel = s => Number.isInteger(s) ? `${s} B` : `${Math.round(s * 8)} bits`;
+      const val = v => has(v) ? esc(Array.isArray(v) ? v.join(', ') : v) : NA;
+      const isTcp = p => p.protocol === 'TCP' || !!p.tcp;
+      const isIpv4 = p => !!p.ipv4 || ['IPv4', 'TCP', 'UDP', 'ICMP'].includes(p.protocol);
+      const flagsOf = p => (p.tcp && Array.isArray(p.tcp.flags)) ? p.tcp.flags : [];
+      const payloadLen = p => has(p.payload?.size) ? p.payload.size : has(p.tcp?.payloadLen) ? p.tcp.payloadLen : (p.payload?.hex ? p.payload.hex.length / 2 : 0);
+      const relTime = p => (state.t0 === null || !has(p.time)) ? '—' : (p.time - state.t0).toFixed(6);
+      const schedule = (() => { let q = false; return fn => { if (q) return; q = true; requestAnimationFrame(() => { q = false; fn(); }); }; })();
+
+      /* ---------- field definitions: [key, label, size in bytes] (sizes are fixed by the protocol specs) ---------- */
+      const FIELDS = {
+        ethernet: [['dst', 'Destination MAC', 6], ['src', 'Source MAC', 6], ['type', 'EtherType', 2]],
+        ipv4: [['version', 'Version', .5], ['ihl', 'IHL', .5], ['tos', 'DSCP / ECN', 1], ['totalLength', 'Total length', 2], ['id', 'Identification', 2],
+        ['flags', 'Flags', 3 / 8], ['fragOffset', 'Fragment offset', 13 / 8], ['ttl', 'TTL', 1], ['protocol', 'Protocol', 1],
+        ['checksum', 'Header checksum', 2], ['src', 'Source IP', 4], ['dst', 'Destination IP', 4]],
+        tcp: [['srcPort', 'Source port', 2], ['dstPort', 'Destination port', 2], ['seq', 'Sequence number', 4], ['ack', 'Acknowledgment number', 4],
+        ['dataOffset', 'Data offset', .5], ['flags', 'Reserved + flags', 1.5], ['window', 'Window size', 2], ['checksum', 'Checksum', 2], ['urgent', 'Urgent pointer', 2]],
+        arp: [['opcode', 'Opcode', 2], ['senderMac', 'Sender MAC', 6], ['senderIp', 'Sender IP', 4], ['targetMac', 'Target MAC', 6], ['targetIp', 'Target IP', 4]],
+      };
+      const LAYERS = [
+        { key: 'ethernet', name: 'Ethernet header', cls: 'l-eth' }, { key: 'ipv4', name: 'IPv4 header', cls: 'l-ip' },
+        { key: 'tcp', name: 'TCP header', cls: 'l-tcp' },
+      ];
+      const ALL_FLAGS = ['SYN', 'ACK', 'PSH', 'FIN', 'RST', 'URG', 'ECE', 'CWR'];
+
+      /* ---------- components (pure: state -> HTML) ---------- */
+      /* Connection steps are derived ONLY from captured TCP flags. */
+      function deriveFlow() {
+        let tcp = state.packets.filter(p => isTcp(p) && p.tcp);
+        const last = tcp[tcp.length - 1];
+        if (last && has(last.conn)) tcp = tcp.filter(p => p.conn === last.conn);
+        const steps = { syn: null, synack: null, ack: null, data: null, close: null };
+        for (const p of tcp) {
+          const f = flagsOf(p), no = p.no;
+          if (f.includes('SYN') && !f.includes('ACK')) steps.syn ??= no;
+          else if (f.includes('SYN') && f.includes('ACK')) steps.synack ??= no;
+          else if (f.includes('ACK') && steps.synack && !steps.ack && !f.includes('FIN') && payloadLen(p) === 0) steps.ack = no;
+          if (payloadLen(p) > 0) steps.data ??= no;
+          if (f.includes('FIN') || f.includes('RST')) steps.close ??= no;
+        }
+        return { steps, tcpCount: tcp.length, conn: last?.conn };
+      }
+      function connState() {
+        if (state.connLabel) return { label: state.connLabel, note: 'Reported by backend' };
+        if (!state.packets.length) return { label: 'Waiting for packets…', note: 'No data yet' };
+        const { steps: s, tcpCount } = deriveFlow();
+        if (!tcpCount) return { label: 'No TCP packets captured', note: 'Observed from captured packets' };
+        const label = s.close ? 'Closing (FIN/RST observed)' : s.data ? 'Data transfer observed' : s.ack ? 'Handshake complete (ACK observed)' :
+          s.synack ? 'SYN-ACK observed' : s.syn ? 'SYN observed' : 'TCP seen, no handshake observed';
+        return { label, note: 'Inferred from captured flags only' };
+      }
+      const Flow = () => {
+        const { steps: s, tcpCount, conn } = deriveFlow();
+        const def = [['syn', 'SYN'], ['synack', 'SYN-ACK'], ['ack', 'ACK'], ['data', 'Data Transfer'], ['close', 'FIN / Closing']];
+        const html = def.map(([k, n], i) => `${i ? '<span class="arrow">→</span>' : ''}<div class="step ${k === 'close' ? 'close' : ''} ${s[k] ? 'on' : ''}"><b>${n}</b><small>${s[k] ? 'Observed · packet #' + s[k] : 'Pending'}</small></div>`).join('');
+        const meta = !state.packets.length ? 'Waiting for packets…' : !tcpCount ? 'No TCP packets captured yet.' :
+          `Based on ${tcpCount} captured TCP packet${tcpCount > 1 ? 's' : ''}${conn ? ' of connection ' + esc(conn) : ' (connections not distinguished)'}. A step is marked only when its flag was actually seen.`;
+        return `<div class="flow">${html}</div><div class="flowmeta">${meta}</div>`;
+      };
+      const Timeline = () => {
+        const P = state.packets.slice(-150);
+        if (!P.length) return empty('Waiting for packets…', 'Captured packets will appear here in chronological order.');
+        return '<div class="timeline">' + P.map(p => `<div class="tl ${esc(p.protocol)}"><time>${relTime(p)}s</time>` +
+          `<span class="badge ${p.protocol === 'TCP' ? 'on' : ''}">${esc(p.protocol)}</span>${p.direction ? `<span class="badge">${esc(p.direction)}</span>` : ''}` +
+          `<span class="info">#${p.no} ${val(p.src)} → ${val(p.dst)} ${has(p.info) ? esc(p.info) : ''}</span></div>`).join('') + '</div>';
+      };
+      function empty(title, sub, icon = 'i-wait') {
+        return `<div class="empty"><svg><use href="#${icon}"/></svg><b>${esc(title)}</b><div>${esc(sub)}</div></div>`;
+      }
+      const fieldCell = (layerKey, [k, label, size], data) => {
+        let v = has(data[k]) ? val(data[k]) : NA;
+        if (k === 'checksum' && has(data.checksumStatus)) {
+          const ok = data.checksumStatus === 'valid', bad = data.checksumStatus === 'invalid';
+          v += ` <span class="badge ${ok ? 'ok' : bad ? 'bad' : ''}">${esc(data.checksumStatus)}</span>`;
+        }
+        return `<div class="f" style="--w:${size}" title="${esc(label)}"><label>${esc(label)}</label><span>${v}</span><em>${sizeLabel(size)}</em></div>`;
+      };
+      const layerBlock = (L, p, detail) => {
+        const d = p[L.key];
+        if (!d) return `<div class="layer l-absent ${L.cls}"><header>${L.name}<small>Not present in this packet</small></header></div>`;
+        const size = has(d.headerLen) ? sizeLabel(d.headerLen) : 'size unavailable';
+        return `<div class="layer ${L.cls}"><header>${L.name}<small>${size}</small></header><div class="fields">${FIELDS[L.key].map(f => fieldCell(L.key, f, d)).join('')}` +
+          (has(d.options) ? `<div class="f" style="--w:3"><label>Options</label><span>${esc(d.options)}</span><em>${has(d.headerLen) ? sizeLabel(d.headerLen - 20) : ''}</em></div>` : '') + '</div></div>';
+      };
+      const textOf = hex => (hex.match(/../g) || []).map(h => { const c = parseInt(h, 16); return c === 10 || c === 13 || c === 9 ? String.fromCharCode(c) : c >= 32 && c < 127 ? String.fromCharCode(c) : '.'; }).join('');
+      const hexDump = hex => (hex.match(/.{1,32}/g) || []).map((row, i) => {
+        const b = row.match(/../g);
+        return i.toString(16).padStart(4, '0') + '0  ' + b.join(' ').padEnd(47) + '  ' + textOf(row).replace(/[\r\n\t]/g, '.');
+      }).join('\n');
+      const payloadBlock = p => {
+        const hex = p.payload?.hex;
+        const size = has(p.payload?.size) ? sizeLabel(p.payload.size) : hex ? sizeLabel(hex.length / 2) : 'size unavailable';
+        if (!hex) return `<div class="layer l-pay"><header>Payload<small>${size}</small></header><div class="empty">${isTcp(p) && payloadLen(p) === 0 ? 'This packet carries no payload.' : 'Payload data unavailable.'}</div></div>`;
+        return `<div class="layer l-pay"><header>Payload<small>${size}</small></header><div class="dumps"><div><h4>Readable text</h4><pre>${esc(textOf(hex))}</pre></div><div><h4>Hexadecimal</h4><pre>${esc(hexDump(hex))}</pre></div></div></div>`;
+      };
+      const selectedPacket = () => state.packets.find(p => p.no === state.selected);
+      const Inspector = () => {
+        const p = selectedPacket();
+        if (!p) return empty('Select a packet to inspect its details.', 'Choose a row in the Packets view.', 'i-inspect');
+        const t = p.tcp, f = flagsOf(p);
+        const cell = (l, v) => `<div><label>${l}</label><span>${val(v)}</span></div>`;
+        const sum = t ? `<div class="sum">${cell('Source port', t.srcPort)}${cell('Destination port', t.dstPort)}${cell('Sequence number', t.seq)}${cell('Acknowledgment number', t.ack)}` +
+          `${cell('TCP header length', has(t.headerLen) ? t.headerLen + ' B' : undefined)}${cell('Window size', t.window)}${cell('Checksum', has(t.checksum) ? t.checksum + (t.checksumStatus ? ' (' + t.checksumStatus + ')' : '') : undefined)}</div>` +
+          `<div class="flags">${ALL_FLAGS.map(n => `<span class="badge ${f.includes(n) ? 'on' : ''}">${n}</span>`).join('')}</div>` : '';
+        const arp = p.arp ? `<div class="layer l-arp"><header>ARP<small>${has(p.arp.headerLen) ? sizeLabel(p.arp.headerLen) : 'size unavailable'}</small></header><div class="fields">${FIELDS.arp.map(x => fieldCell('arp', x, p.arp)).join('')}</div></div>` : '';
+        return `<p class="muted small">Packet #${p.no} · ${val(p.protocol)} · ${val(p.length)} bytes on wire</p>${sum}${LAYERS.slice(0, 1).map(L => layerBlock(L, p)).join('')}${arp}${LAYERS.slice(1).map(L => layerBlock(L, p)).join('')}${payloadBlock(p)}`;
+      };
+      const Structure = () => {
+        const p = selectedPacket();
+        if (!p) return empty('No packet selected', 'The layered diagram is built from the real headers of the selected packet.', 'i-flow');
+        const parts = [...LAYERS.map(L => layerBlock(L, p)), payloadBlock(p)];
+        return '<div class="stack">' + parts.join('<div class="link">↓</div>') + '</div>';
+      };
+
+      /* ---------- metrics helpers (all derived from captured packets) ---------- */
+      const toast = m => { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove('show'), 2600); };
+      const fmtB = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(2) + ' KB' : (n / 1048576).toFixed(2) + ' MB';
+      const lenOf = p => has(p.length) ? +p.length : 0;
+      const nowRef = () => { const l = state.packets.at(-1); return l && has(l.time) ? (l.time > 1e9 ? Date.now() / 1000 : l.time) : 0; };
+      const recent = s => { const n = nowRef(); return state.packets.filter(p => has(p.time) && n - p.time <= s); };
+      const isAnom = p => p.protocol === 'Malformed' || flagsOf(p).includes('RST') || p.ipv4?.checksumStatus === 'invalid' || p.tcp?.checksumStatus === 'invalid';
+      const srcOf = p => p.ipv4?.src ?? p.src, dstOf = p => p.ipv4?.dst ?? p.dst, dPort = p => p.tcp?.dstPort ?? p.udp?.dstPort;
+      const SVC = { 21: 'FTP', 22: 'SSH', 53: 'DNS', 80: 'HTTP', 443: 'HTTPS' };
+      const top = (arr, n = 5) => { const m = new Map(); arr.forEach(k => has(k) && m.set(k, (m.get(k) || 0) + 1)); return [...m].sort((a, b) => b[1] - a[1]).slice(0, n); };
+      const waiting = 'Waiting for packets…';
+      const Stats = () => {
+        const P = state.packets, loading = state.backend.status === 'connecting' && !P.length;
+        const sc = (label, v, ic, col, note) => `<div class="sc"><div><label>${label}</label><div class="v ${loading ? 'skeleton' : ''}">${v}</div>${note ? `<small>${note}</small>` : ''}</div><svg style="color:${col}"><use href="#${ic}"/></svg></div>`;
+        const bytes = P.reduce((s, p) => s + lenOf(p), 0), pps = recent(5).length / 5;
+        return sc('Total Packets', P.length, 'i-bolt', '#60a5fa') + sc('Total Bytes', fmtB(bytes), 'i-pulse', '#34d399') +
+          sc('Packets/sec', pps.toFixed(1) + ' pkt/s', 'i-globe', '#a78bfa', 'last 5 s') + sc('Anomalies', P.filter(isAnom).length, 'i-alert', '#f87171', 'bad checksum, RST, malformed');
+      };
+      const Mini = () => {
+        const P = state.packets, cs = connState();
+        const ifaceTxt = { idle: 'Not connected', connecting: 'Checking…', error: 'Unknown (error)' }[state.backend.status] || { up: 'Up', down: 'Down', unknown: 'Unknown' }[state.iface];
+        const m = (l, v) => `<div><label>${l}</label><b>${v}</b></div>`;
+        return m('TCP', P.filter(isTcp).length) + m('IPv4', P.filter(isIpv4).length) + m('ARP', P.filter(p => p.protocol === 'ARP').length) + m('ACK', P.filter(p => flagsOf(p).includes('ACK')).length) +
+          m('TCP state', `<span title="${esc(cs.note)}">${esc(cs.label)}</span>`) + m(`TAP ${esc(state.cfg.iface)}`, esc(ifaceTxt));
+      };
+      const ring = (label, pct, sub, col) => {
+        const r = 34, C = 2 * Math.PI * r;
+        return `<div class="ringbox"><svg viewBox="0 0 90 90" class="ring"><circle cx="45" cy="45" r="${r}" class="rbg"/><circle cx="45" cy="45" r="${r}" class="rfg" style="stroke:${col};stroke-dasharray:${C * (pct || 0) / 100} ${C}" transform="rotate(-90 45 45)"/>` +
+          `<text x="45" y="45" class="rt">${pct === null ? '—' : pct + '%'}</text><text x="45" y="59" class="rs">${sub}</text></svg><div class="muted">${label}</div></div>`;
+      };
+      const Rings = () => {
+        const D = state.packets.filter(p => p.direction === 'RX' || p.direction === 'TX');
+        if (!D.length) return ring('Received (RX)', null, 'no data', '#60a5fa') + ring('Sent (TX)', null, 'no data', '#34d399');
+        const by = d => D.filter(p => p.direction === d), sum = a => a.reduce((s, p) => s + lenOf(p), 0);
+        const rx = sum(by('RX')), tx = sum(by('TX')), tot = rx + tx || 1, rate = d => fmtB(sum(recent(5).filter(p => p.direction === d)) / 5) + '/s';
+        return ring('Received (RX) · byte share', Math.round(rx / tot * 100), rate('RX'), '#60a5fa') + ring('Sent (TX) · byte share', Math.round(tx / tot * 100), rate('TX'), '#34d399');
+      };
+      const rowsList = (items, fmt) => items.length ? items.map(([k, n], i) => `<div class="lrow"><span class="idx">${i + 1}</span>${fmt(k)}<span class="muted">${n} packets</span></div>`).join('') : `<div class="muted">${waiting}</div>`;
+      const Srcs = () => rowsList(top(state.packets.map(srcOf)), k => `<span class="ipc">${esc(k)}</span>`);
+      const Ports = () => rowsList(top(state.packets.map(dPort)), k => `<span>${k}${SVC[k] ? ` <small class="muted">(${SVC[k]})</small>` : ''}</span>`);
+      const Health = () => {
+        const C = state.packets.map(p => [p.ipv4?.checksumStatus, p.tcp?.checksumStatus]).flat().filter(s => s === 'valid' || s === 'invalid');
+        if (!C.length) return `<div class="muted">${state.packets.length ? 'Checksum status unavailable in captured packets.' : waiting}</div>`;
+        const ok = C.filter(s => s === 'valid').length, pct = Math.round(ok / C.length * 100);
+        return `<div class="big">${pct}%</div><div class="muted small">checksums valid</div><div class="bar"><i style="width:${pct}%"></i></div><div class="muted small">${ok} of ${C.length} checked headers valid · ${state.packets.filter(isAnom).length} anomalous packets</div>`;
+      };
+      const Metrics = () => {
+        const P = state.packets; if (!P.length) return `<div class="muted">${waiting}</div>`;
+        const u = f => new Set(P.map(f).filter(has)).size, conn = new Set(P.map(p => p.conn).filter(has)).size;
+        const r = (l, v) => `<div class="mrow"><span class="muted">${l}</span><b>${v}</b></div>`;
+        const lens = P.filter(p => has(p.length));
+        return r('Unique sources', u(srcOf)) + r('Unique destinations', u(dstOf)) + r('Unique destination ports', u(dPort)) +
+          r('Avg packet size', lens.length ? (lens.reduce((s, p) => s + +p.length, 0) / lens.length).toFixed(2) + ' B' : 'Data unavailable') + r('TCP connections', conn || 'Data unavailable');
+      };
+      const Dist = () => {
+        const P = state.packets; if (!P.length) return `<div class="muted">${waiting}</div>`;
+        const m = new Map(); P.forEach(p => m.set(p.protocol, (m.get(p.protocol) || 0) + 1));
+        return [...m].sort((a, b) => b[1] - a[1]).map(([k, n]) => `<div class="drow"><div><span>${esc(k)}</span><span class="muted">${n} (${(n / P.length * 100).toFixed(1)}%)</span></div><div class="bar"><i style="width:${n / P.length * 100}%"></i></div></div>`).join('');
+      };
+      const Intensity = () => {
+        const P = state.packets.filter(p => has(p.time)); if (!P.length) return `<div class="muted">${waiting}</div>`;
+        const n = nowRef(), bins = Array(60).fill(0); P.forEach(p => { const a = Math.floor(n - p.time); if (a >= 0 && a < 60) bins[59 - a]++; });
+        const mx = Math.max(1, ...bins);
+        return `<svg viewBox="0 0 600 120" class="chart" preserveAspectRatio="none">${bins.map((v, i) => `<rect x="${i * 10 + 1}" y="${110 - v / mx * 100}" width="8" height="${v / mx * 100}" rx="2" fill="${v ? '#60a5fa' : '#16161a'}"><title>${v} packets</title></rect>`).join('')}</svg><div class="axis"><span>60 s ago</span><span>peak ${mx} pkt/s</span><span>now</span></div>`;
+      };
+      const Conns = () => {
+        const T = state.packets.filter(p => isTcp(p) && p.tcp);
+        if (!T.length) return `<div class="muted">${state.packets.length ? 'No TCP packets captured yet.' : waiting}</div>`;
+        const g = new Map(); T.forEach(p => { const k = p.conn ?? null; if (!g.has(k)) g.set(k, []); g.get(k).push(p); });
+        if (g.size === 1 && g.has(null)) return '<div class="muted">Data unavailable: packets carry no connection key (<code>conn</code>), so connections cannot be separated.</div>';
+        return '<div class="table-wrap"><table><thead><tr><th>Connection</th><th>Packets</th><th>Payload bytes</th><th>Flags seen</th></tr></thead><tbody>' +
+          [...g].map(([k, l]) => `<tr><td>${val(k)}</td><td>${l.length}</td><td>${l.reduce((s, p) => s + payloadLen(p), 0)}</td><td>${[...new Set(l.flatMap(flagsOf))].join(', ') || '—'}</td></tr>`).join('') + '</tbody></table></div>';
+      };
+      const COMPONENTS = { health: Health, srcs: Srcs, ports: Ports, metrics: Metrics, dist: Dist, intensity: Intensity, conns: Conns, flow: Flow, timeline: Timeline, inspector: Inspector, structure: Structure };
+
+      /* ---------- renderers ---------- */
+      /* ---------- renderers ---------- */
+      function renderBanner() {
+        const { status, message } = state.backend, el = $('#banner');
+        if (!el) return;
+        if (status === 'error') {
+          el.className = 'banner error';
+          el.innerHTML = `<svg><use href="#i-alert"/></svg><div><b>Backend error</b><span>${esc(message)}</span></div><button class="btn" id="retry">Retry</button>`;
+          const ret = $('#retry');
+          if (ret) ret.onclick = () => API.onRetry(false);
+        } else {
+          el.className = 'banner hide';
+          el.innerHTML = '';
+        }
+        const labels = { idle: 'not connected', connecting: 'connecting…', connected: 'connected', error: 'error' };
+        $$('[data-bind=backendPill]').forEach(e => e.textContent = 'Backend: ' + (labels[status] || status));
+        $$('[data-bind=dot]').forEach(e => e.className = 'dot ' + status);
+        $$('[data-bind=sideIface]').forEach(e => e.textContent = `${state.cfg.iface} · ${status === 'connected' ? state.iface : 'not connected'}`);
+      }
+
+      const visible = () => {
+        const q = state.query.toLowerCase();
+        return state.packets.filter(p => {
+          if (state.protos.size) {
+            const m = [...state.protos].some(k => k === 'TCP' ? isTcp(p) : k === 'IPv4' ? isIpv4(p) : p.protocol === k);
+            if (!m) return false;
+          }
+          return !q || [p.no, p.src, p.dst, p.protocol, p.info].some(v => has(v) && String(v).toLowerCase().includes(q));
+        });
+      };
+
+      function renderTable(autoScroll = false) {
+        const rows = visible(), shown = rows.slice(-500), empt = $('#tableEmpty'), tbody = $('#rows');
+        if (!tbody) return;
+        tbody.innerHTML = shown.map(p => `<tr class="p-${esc(p.protocol)} ${p.no === state.selected ? 'sel' : ''}" data-no="${p.no}" tabindex="0">` +
+          `<td>${p.no}</td><td>${relTime(p)}</td><td>${has(p.srcIp ?? p.src) ? esc(p.srcIp ?? p.src) : '—'}</td><td>${has(p.dstIp ?? p.dst) ? esc(p.dstIp ?? p.dst) : '—'}</td>` +
+          `<td>${esc(p.protocol)}</td><td>${has(p.length) ? p.length : '—'}</td><td title="${esc(p.info ?? '')}">${has(p.info) ? esc(p.info) : '—'}</td></tr>`).join('');
+        if (!state.packets.length) {
+          empt.style.display = '';
+          empt.innerHTML = state.backend.status === 'error' ? empty('Cannot load packets', state.backend.message, 'i-alert') : empty('Waiting for packets…', 'The table stays empty until real packets are received.');
+        } else if (!rows.length) {
+          empt.style.display = '';
+          empt.innerHTML = empty('No packets match the current filter', 'Adjust the search or protocol filters.', 'i-inspect');
+        } else {
+          empt.style.display = 'none';
+        }
+        $('#tableNote').textContent = state.packets.length ? `Showing ${shown.length} of ${rows.length} matching · ${state.packets.length} captured` : '';
+        if (autoScroll && $('#follow') && $('#follow').checked) {
+          const w = $('#tableWrap');
+          if (w) w.scrollTop = w.scrollHeight;
+        }
+      }
+
+      function renderSlots() {
+        const st = $('#stats'); if (st) st.innerHTML = Stats();
+        const ri = $('#rings'); if (ri) ri.innerHTML = Rings();
+        const mi = $('#mini'); if (mi) mi.innerHTML = Mini();
+        $$('[data-bind=ifaceName]').forEach(e => e.textContent = state.cfg.iface);
+        $$(`#view-${state.view} [data-slot]`).forEach(el => {
+          const sc = el.querySelector('.timeline'), atEnd = !sc || sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 30;
+          el.innerHTML = COMPONENTS[el.dataset.slot]();
+          const t = el.querySelector('.timeline'); if (t && atEnd) t.scrollTop = t.scrollHeight;
+        });
+      }
+
+      const renderAll = (autoScroll = false) => schedule(() => {
+        renderBanner();
+        if (state.view === 'live') renderTable(autoScroll);
+        renderSlots();
+      });
+
+      /* ---------- navigation & events ---------- */
+      const TITLES = { live: 'Live Stream', stats: 'Statistics', conns: 'Connections', settings: 'Settings' };
+      function navigate() {
+        const v = (location.hash || '#live').slice(1); state.view = TITLES[v] ? v : 'live';
+        $$('.view').forEach(e => e.classList.toggle('active', e.id === 'view-' + state.view));
+        $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.view === state.view));
+        renderAll(false);
+      }
+
+      function select(no) {
+        if (state.selected === no) return;
+        state.selected = no;
+        $$('#rows tr').forEach(tr => tr.classList.toggle('sel', +tr.dataset.no === no));
+        const ins = $('[data-slot="inspector"]');
+        if (ins) ins.innerHTML = Inspector();
+        const str = $('[data-slot="structure"]');
+        if (str) str.innerHTML = Structure();
+      }
+
+      function bind() {
+        window.addEventListener('hashchange', navigate);
+        $('#search').oninput = e => { state.query = e.target.value; renderTable(false); };
+        $('#chips').onclick = e => {
+          const b = e.target.closest('.chip'); if (!b) return; const k = b.dataset.proto;
+          state.protos.has(k) ? state.protos.delete(k) : state.protos.add(k); b.setAttribute('aria-pressed', state.protos.has(k));
+          renderTable(false);
+        };
+        $('#clearBtn').onclick = () => API.clear();
+        const runBtn = $('#runTestBtn');
+        if (runBtn) {
+          runBtn.onclick = async () => {
+            try {
+              toast('Triggering Reno Self-Test on Custom Stack...');
+              const root = state.cfg.backendUrl.replace(/\/$/, '');
+              await fetch(root + '/api/run-selftest', { method: 'POST' });
+              setTimeout(() => API.onRetry(true), 250);
+              setTimeout(() => API.onRetry(true), 650);
+              setTimeout(() => API.onRetry(true), 1300);
+              setTimeout(() => API.onRetry(true), 2200);
+            } catch(e) {
+              toast('Failed to start self-test: ' + e.message);
+            }
+          };
+        }
+        $('#pauseBtn').onclick = () => {
+          state.paused = !state.paused;
+          $('#pauseBtn span').textContent = state.paused ? 'Resume' : 'Pause';
+          if (!state.paused) renderAll(false);
+          toast(state.paused ? 'Display paused. Packets are still stored.' : 'Resumed.');
+        };
+        $('#exportBtn').onclick = () => {
+          if (!state.packets.length) return toast('Nothing to export: no packets captured yet.');
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(new Blob([JSON.stringify(state.packets, null, 2)], { type: 'application/json' }));
+          a.download = 'stackscope-capture.json';
+          a.click();
+          toast(`Exported ${state.packets.length} captured packets.`);
+        };
+        $('#rows').onclick = e => { const tr = e.target.closest('tr'); if (tr) select(+tr.dataset.no); };
+        $('#rows').onkeydown = e => {
+          const tr = e.target.closest('tr'); if (!tr) return;
+          if (e.key === 'Enter') select(+tr.dataset.no);
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            const n = e.key === 'ArrowDown' ? tr.nextElementSibling : tr.previousElementSibling;
+            if (n) { e.preventDefault(); select(+n.dataset.no); setTimeout(() => $(`tr[data-no="${n.dataset.no}"]`)?.focus()); }
+          }
+        };
+        $('#cfgUrl').value = state.cfg.backendUrl; $('#cfgIface').value = state.cfg.iface; $('#cfgMax').value = state.cfg.maxPackets;
+        $('#saveCfg').onclick = () => {
+          state.cfg = { backendUrl: $('#cfgUrl').value.trim(), iface: $('#cfgIface').value.trim() || 'tap0', maxPackets: Math.max(100, +$('#cfgMax').value || 5000) };
+          try { localStorage.setItem('stackscope.cfg', JSON.stringify(state.cfg)); } catch { }
+          $('#cfgMsg').textContent = 'Saved.';
+          renderAll(false);
+        };
+        $('#connectBtn').onclick = () => API.onRetry(false);
+        $$('[data-preview]').forEach(b => b.onclick = () => API.setBackendStatus(b.dataset.preview, { idle: 'Backend not connected yet.', connecting: 'Preview of the loading state.', error: 'Preview of the error state.' }[b.dataset.preview]));
+      }
+
+      /* ---------- public API ---------- */
+      const API = {
+        ingestPacket(p) {
+          if (!p || typeof p !== 'object' || !has(p.protocol)) return;
+          p.no = has(p.no) ? p.no : (state.packets.at(-1)?.no ?? 0) + 1;
+          if (state.t0 === null && has(p.time)) state.t0 = p.time;
+          state.packets.push(p);
+          if (state.packets.length > state.cfg.maxPackets) state.packets.splice(0, state.packets.length - state.cfg.maxPackets);
+          if (state.selected === null) state.selected = p.no;
+          if (!state.paused) renderAll(true);
+        },
+
+        ingestPackets(list) {
+          if (!Array.isArray(list)) return;
+          const prevLen = state.packets.length;
+          const newLen = list.length;
+          const prevLast = state.packets[prevLen - 1]?.no;
+          const newLast = list[newLen - 1]?.no;
+
+          // If identical, do nothing (no re-renders, no movement!)
+          if (prevLen === newLen && prevLast === newLast) {
+            return;
+          }
+
+          if (newLen < prevLen) {
+            state.packets = list.map(raw => ({
+              ...raw,
+              src: raw.src ?? raw.source,
+              dst: raw.dst ?? raw.destination
+            }));
+            state.selected = state.packets.length ? state.packets[0].no : null;
+            if (!state.paused) renderAll(true);
+            return;
+          }
+
+          const existingIds = new Set(state.packets.map(p => p.no));
+          let countAdded = 0;
+          list.forEach(raw => {
+            const p = {
+              ...raw,
+              src: raw.src ?? raw.source,
+              dst: raw.dst ?? raw.destination
+            };
+            if (!existingIds.has(p.no)) {
+              if (state.t0 === null && has(p.time)) state.t0 = p.time;
+              state.packets.push(p);
+              existingIds.add(p.no);
+              countAdded++;
+            }
+          });
+
+          if (state.packets.length > state.cfg.maxPackets) {
+            state.packets.splice(0, state.packets.length - state.cfg.maxPackets);
+          }
+
+          if (state.selected === null && state.packets.length > 0) {
+            state.selected = state.packets[0].no;
+          }
+
+          if (countAdded > 0 && !state.paused) {
+            renderAll(true);
+          }
+        },
+
+        clear() {
+          state.packets = []; state.selected = null; state.t0 = null; state.connLabel = null;
+          API.onClear();
+          renderAll(false);
+        },
+
+        setBackendStatus(status, message = '') {
+          if (state.backend.status === status && state.backend.message === message) return;
+          state.backend = { status, message };
+          renderBanner();
+        },
+
+        setInterfaceStatus(s) { state.iface = s; renderAll(false); },
+        setConnectionState(label) { state.connLabel = label; renderAll(false); },
+
+        onClear() {
+          try {
+            const root = state.cfg.backendUrl.replace(/\/$/, '');
+            fetch(root + '/api/clear', { method: 'POST' }).catch(() => {});
+          } catch(e) {}
+        },
+
+        async onRetry(silent = false) {
+          if (!silent && state.backend.status !== 'connected') {
+            API.setBackendStatus('connecting', 'Connecting to backend...');
+          }
+
+          try {
+            const root = state.cfg.backendUrl.replace(/\/$/, '');
+
+            const statusResponse = await fetch(root + '/api/status');
+            if (!statusResponse.ok) {
+              throw new Error('Status HTTP ' + statusResponse.status);
+            }
+            const statusData = await statusResponse.json().catch(() => ({}));
+            if (statusData.state) {
+              state.connLabel = statusData.state;
+            }
+
+            const packetResponse = await fetch(root + '/api/packets');
+            if (!packetResponse.ok) {
+              throw new Error('Packets HTTP ' + packetResponse.status);
+            }
+
+            const data = await packetResponse.json();
+            if (!Array.isArray(data.packets)) {
+              throw new Error('Invalid packets response');
+            }
+
+            API.setBackendStatus(
+              'connected',
+              'Connected · ' + data.packets.length + ' packets captured'
+            );
+
+            API.ingestPackets(data.packets);
+          } catch (e) {
+            API.setBackendStatus('error', 'Backend request failed: ' + e.message);
+          }
+        },
+      };
+
+      window.StackScope = API;
+
+      async function pollBackend() {
+        if (!state.paused) {
+          await API.onRetry(true); // silent = true
+        }
+      }
+
+      setInterval(pollBackend, 1500);
+      bind();
+      navigate();
+      setTimeout(() => API.onRetry(false), 200);
+    })();
+  </script>
+</body>
+
+</html>

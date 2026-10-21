@@ -1,0 +1,9 @@
+# Object files and temporary artifacts
+*.o
+*.obj
+*.tmp
+*.log
+
+# Keep precompiled binaries for quick portability across laptops
+!*.exe
+!bin/*.exe
