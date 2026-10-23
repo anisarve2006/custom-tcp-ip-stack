@@ -10,6 +10,7 @@
 #ifdef _WIN32
   #include <windows.h>
   #include <shellapi.h>
+  #include <conio.h>
   #define SLEEP_MS(ms) Sleep(ms)
 #else
   #include <unistd.h>
@@ -51,11 +52,82 @@ static void open_browser(const char *url) {
 }
 
 static void wait_for_enter(void) {
-    printf("\n\033[1;33m>>> Press [ENTER] to return to menu...\033[0m ");
+    printf("\n\033[1;33m>>> Press [ENTER] to continue...\033[0m ");
     fflush(stdout);
     int c;
     while ((c = getchar()) != '\n' && c != EOF);
 }
+
+/* ======================================================================
+ * MULTI-CONNECTION MANAGER & PERSISTENT SESSION TRACKING
+ * ====================================================================== */
+#define MAX_CONNECTIONS 8
+
+typedef struct {
+    int id;                      /* Connection #1, #2, ... */
+    int in_use;                  /* 1 if slot allocated */
+    char peer_ip[64];
+    int peer_port;
+    int local_port;
+    link_handle_t link;
+    tcp_state_t state;
+    uint32_t my_iss;
+    uint32_t snd_nxt;
+    uint32_t snd_una;
+    uint32_t rcv_nxt;
+    uint32_t packets_tx;
+    uint32_t packets_rx;
+    uint32_t bytes_sent;
+    time_t connected_at;
+} custom_conn_t;
+
+static custom_conn_t g_conns[MAX_CONNECTIONS];
+static int g_conn_counter = 1;
+static int g_client_pcap_open = 0;
+
+static int count_active_connections(void) {
+    int cnt = 0;
+    for (int i = 0; i < MAX_CONNECTIONS; i++) {
+        if (g_conns[i].in_use && g_conns[i].state == STATE_ESTABLISHED) {
+            cnt++;
+        }
+    }
+    return cnt;
+}
+
+static void print_active_connections(void) {
+    printf("\n\033[1;36m========================= ACTIVE CONNECTIONS =========================\033[0m\n");
+    int count = 0;
+    for (int i = 0; i < MAX_CONNECTIONS; i++) {
+        if (g_conns[i].in_use) {
+            count++;
+            printf("  [\033[1;32mConnection #%d\033[0m] Local Port: \033[1;33m%d\033[0m <---> Remote Peer: \033[1;33m%s:%d\033[0m\n",
+                   g_conns[i].id, g_conns[i].local_port, g_conns[i].peer_ip, g_conns[i].peer_port);
+            printf("       Status: \033[1;32m%s\033[0m | Next Seq: %u | Ack: %u | TX: %u pkts (%u B) | RX: %u pkts\n",
+                   state_to_str(g_conns[i].state), g_conns[i].snd_nxt, g_conns[i].rcv_nxt,
+                   g_conns[i].packets_tx, g_conns[i].bytes_sent, g_conns[i].packets_rx);
+        }
+    }
+    if (count == 0) {
+        printf("  (No active connections established)\n");
+    }
+    printf("\033[1;36m======================================================================\033[0m\n");
+}
+
+static custom_conn_t *find_connection_by_id(int id) {
+    if (id <= 0) return NULL;
+    for (int i = 0; i < MAX_CONNECTIONS; i++) {
+        if (g_conns[i].in_use && g_conns[i].id == id) {
+            return &g_conns[i];
+        }
+    }
+    return NULL;
+}
+
+/* Forward declarations */
+static void run_connection_session(custom_conn_t *conn);
+static custom_conn_t *create_client_connection(const char *server_ip, int server_port);
+static int conn_close_connection(custom_conn_t *conn);
 
 /* Run Server / Receiver Mode */
 static int run_server_mode(int port) {
@@ -64,6 +136,7 @@ static int run_server_mode(int port) {
     printf("  Listening on UDP Port: \033[1;33m%d\033[0m (Wi-Fi / LAN / Local)\n", port);
     printf("  OS TCP Bypass: \033[1;32mACTIVE (User-Space Protocol Engine)\033[0m\n");
     printf("  Web Dashboard: \033[1;34mhttp://localhost:8080\033[0m\n");
+    printf("  Note: Press [Q] at any time to stop server and return to menu.\n");
     printf("\033[1;36m===============================================================\033[0m\n\n");
 
     if (link_init(port, NULL, 0) != 0) {
@@ -83,10 +156,19 @@ static int run_server_mode(int port) {
     uint8_t rx_buf[MAX_FRAME_SIZE];
     uint8_t tx_buf[MAX_FRAME_SIZE];
 
-    printf("[STATE: \033[1;34m%s\033[0m] Waiting for client connection... (Press Ctrl+C to stop)\n", state_to_str(state));
+    printf("[STATE: \033[1;34m%s\033[0m] Waiting for client connection... (Press 'Q' to return to menu)\n", state_to_str(state));
 
     int running = 1;
     while (running) {
+#ifdef _WIN32
+        if (_kbhit()) {
+            int ch = _getch();
+            if (ch == 'q' || ch == 'Q' || ch == 27) {
+                printf("\n[Server Mode] Stopped by user request.\n");
+                break;
+            }
+        }
+#endif
         int bytes = link_recv_frame(rx_buf, sizeof(rx_buf));
         if (bytes > 0) {
             pcap_write_frame(rx_buf, bytes, 0);
@@ -95,7 +177,8 @@ static int run_server_mode(int port) {
             const uint8_t *payload = NULL;
             if (parse_custom_packet(rx_buf, bytes, &hdr, &payload) == 0) {
                 print_packet_details(">>> RX", &hdr, bytes);
-                telemetry_log_packet(0, (hdr.flags & FLAG_SYN) ? "SYN" : (hdr.flags & FLAG_DATA) ? "DATA" : "ACK", hdr.seq_num, hdr.ack_num, hdr.payload_len);
+                telemetry_log_packet(0, (hdr.flags & FLAG_SYN) ? "SYN" : (hdr.flags & FLAG_DATA) ? "DATA" : (hdr.flags & FLAG_FIN) ? "FIN" : "ACK",
+                                     hdr.seq_num, hdr.ack_num, hdr.payload_len);
 
                 if (state == STATE_LISTEN && (hdr.flags & FLAG_SYN)) {
                     printf("\n\033[1;32m[Handshake: Step 1 received]\033[0m SYN from client (Seq=%u)\n", hdr.seq_num);
@@ -120,7 +203,7 @@ static int run_server_mode(int port) {
                     printf("\n\033[1;32m[Handshake: Step 3 received]\033[0m ACK from client (Ack=%u)\n", hdr.ack_num);
                     state = STATE_ESTABLISHED;
                     telemetry_update_state("ESTABLISHED");
-                    printf("\033[1;32m>>> [CONNECTION ESTABLISHED!]\033[0m Ready for application data transfer.\n\n");
+                    printf("\033[1;32m>>> [CONNECTION ESTABLISHED!]\033[0m Ready for continuous application data transfer.\n\n");
                 }
                 else if (state == STATE_ESTABLISHED) {
                     if (hdr.flags & FLAG_DATA) {
@@ -150,9 +233,10 @@ static int run_server_mode(int port) {
                         pcap_write_frame(tx_buf, tx_len, 1);
                         print_packet_details("<<< TX", (myproto_hdr_t *)tx_buf, tx_len);
                         telemetry_log_packet(1, "ACK", snd_nxt, rcv_nxt, 0);
+                        printf("\033[1;36m[KEEP-ALIVE] Connection remains ESTABLISHED and ALIVE for next messages.\033[0m\n\n");
                     }
                     else if (hdr.flags & FLAG_FIN) {
-                        printf("\n\033[1;33m[Teardown]\033[0m FIN received from client. Closing connection.\n");
+                        printf("\n\033[1;33m[Teardown]\033[0m FIN received from client. Acknowledging teardown.\n");
                         rcv_nxt = hdr.seq_num + 1;
                         int tx_len = serialize_custom_packet(tx_buf, sizeof(tx_buf),
                                                             FLAG_ACK,
@@ -160,10 +244,11 @@ static int run_server_mode(int port) {
                                                             MYPROTO_DEFAULT_WND, NULL, 0);
                         link_send_frame(tx_buf, tx_len);
                         pcap_write_frame(tx_buf, tx_len, 1);
-                        state = STATE_CLOSED;
-                        telemetry_update_state("CLOSED");
-                        printf("[STATE -> \033[1;31m%s\033[0m] Teardown complete.\n", state_to_str(state));
-                        break;
+                        state = STATE_LISTEN;
+                        rcv_nxt = 0;
+                        snd_nxt = my_iss;
+                        telemetry_update_state("LISTEN");
+                        printf("\033[1;32m[SERVER READY]\033[0m Client disconnected cleanly. Server resets to LISTEN state for incoming connections...\n\n");
                     }
                 }
             }
@@ -176,79 +261,108 @@ static int run_server_mode(int port) {
     return 0;
 }
 
-/* Run Client / Sender Mode */
-static int run_client_mode(const char *server_ip, int server_port) {
-    printf("\n\033[1;36m===============================================================\033[0m\n");
-    printf("\033[1;32m  [CUSTOM PROTOCOL STACK] - Sender / Client Mode\033[0m\n");
-    printf("  Target Server: \033[1;33m%s:%d\033[0m\n", server_ip, server_port);
-    printf("  OS TCP Bypass: \033[1;32mACTIVE (User-Space Protocol Engine)\033[0m\n");
-    printf("  Web Dashboard: \033[1;34mhttp://localhost:8080\033[0m\n");
-    printf("\033[1;36m===============================================================\033[0m\n\n");
-
-    if (link_init(9998, server_ip, server_port) != 0) {
-        fprintf(stderr, "Failed to initialize network link.\n");
-        return 1;
+/* ======================================================================
+ * CLIENT / SENDER IMPLEMENTATION WITH MULTI-CONNECTION & PERSISTENT SESSION
+ * ====================================================================== */
+static custom_conn_t *create_client_connection(const char *server_ip, int server_port) {
+    int slot = -1;
+    for (int i = 0; i < MAX_CONNECTIONS; i++) {
+        if (!g_conns[i].in_use) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot == -1) {
+        printf("\033[1;31m[ERROR] Maximum concurrent connections reached (%d).\033[0m\n", MAX_CONNECTIONS);
+        return NULL;
     }
 
-    pcap_init("captures/client_traffic.pcap");
-    printf("[PCAP] Capturing all on-wire frames to 'captures/client_traffic.pcap'...\n\n");
+    custom_conn_t *c = &g_conns[slot];
+    memset(c, 0, sizeof(custom_conn_t));
 
-    tcp_state_t state = STATE_CLOSED;
-    telemetry_update_state("CLOSED");
-    uint32_t my_iss = 10000;
-    uint32_t snd_nxt = my_iss;
-    uint32_t snd_una = my_iss;
-    uint32_t rcv_nxt = 0;
-    (void)snd_una;
+    int base_local_port = 9998 - slot;
+    c->link = link_create(base_local_port, server_ip, server_port);
+    if (!c->link) {
+        fprintf(stderr, "\033[1;31m[ERROR] Failed to bind local network link for %s:%d\033[0m\n",
+                server_ip, server_port);
+        return NULL;
+    }
 
+    c->local_port = link_get_local_port(c->link);
+    c->id = g_conn_counter++;
+    c->in_use = 1;
+    strncpy(c->peer_ip, server_ip, sizeof(c->peer_ip) - 1);
+    c->peer_port = server_port;
+    c->state = STATE_CLOSED;
+    c->my_iss = 10000 + (c->id * 5000);
+    c->snd_nxt = c->my_iss;
+    c->snd_una = c->my_iss;
+    c->rcv_nxt = 0;
+    c->connected_at = time(NULL);
+
+    if (!g_client_pcap_open) {
+        pcap_init("captures/client_traffic.pcap");
+        g_client_pcap_open = 1;
+        printf("[PCAP] Capturing traffic to 'captures/client_traffic.pcap'...\n");
+    }
+
+    /* Step 1: Send SYN */
     uint8_t tx_buf[MAX_FRAME_SIZE];
     uint8_t rx_buf[MAX_FRAME_SIZE];
 
-    /* Step 1: Send SYN */
-    printf("\033[1;32m[Handshake: Step 1 sending]\033[0m Initiating 3-way handshake with SYN (Seq=%u)\n", snd_nxt);
+    printf("\n\033[1;36m===============================================================\033[0m\n");
+    printf("\033[1;32m  [INITIATING CONNECTION #%d]\033[0m\n", c->id);
+    printf("  Local Port: \033[1;33m%d\033[0m  --->  Target Peer: \033[1;33m%s:%d\033[0m\n", c->local_port, c->peer_ip, c->peer_port);
+    printf("\033[1;36m===============================================================\033[0m\n");
+
+    printf("\033[1;32m[Handshake: Step 1 sending]\033[0m SYN to %s:%d (Seq=%u, LocalPort=%d)\n",
+           c->peer_ip, c->peer_port, c->snd_nxt, c->local_port);
+
     int tx_len = serialize_custom_packet(tx_buf, sizeof(tx_buf),
                                         FLAG_SYN,
-                                        snd_nxt, 0,
+                                        c->snd_nxt, 0,
                                         MYPROTO_DEFAULT_WND, NULL, 0);
-    snd_nxt++;
-    link_send_frame(tx_buf, tx_len);
+    c->snd_nxt++;
+    link_send(c->link, tx_buf, tx_len);
     pcap_write_frame(tx_buf, tx_len, 1);
     print_packet_details("<<< TX", (myproto_hdr_t *)tx_buf, tx_len);
-    telemetry_log_packet(1, "SYN", snd_nxt - 1, 0, 0);
+    telemetry_log_packet(1, "SYN", c->snd_nxt - 1, 0, 0);
+    c->packets_tx++;
 
-    state = STATE_SYN_SENT;
+    c->state = STATE_SYN_SENT;
     telemetry_update_state("SYN_SENT");
-    printf("[STATE -> \033[1;34m%s\033[0m] Waiting for SYN + ACK from %s...\n", state_to_str(state), server_ip);
+    printf("[STATE -> \033[1;34m%s\033[0m] Waiting for SYN + ACK from %s:%d...\n", state_to_str(c->state), c->peer_ip, c->peer_port);
 
     int handshake_done = 0;
     int retries = 0;
     while (!handshake_done && retries < 500) {
-        int bytes = link_recv_frame(rx_buf, sizeof(rx_buf));
+        int bytes = link_recv(c->link, rx_buf, sizeof(rx_buf));
         if (bytes > 0) {
             pcap_write_frame(rx_buf, bytes, 0);
             myproto_hdr_t hdr;
             if (parse_custom_packet(rx_buf, bytes, &hdr, NULL) == 0) {
                 print_packet_details(">>> RX", &hdr, bytes);
-                telemetry_log_packet(0, "SYN+ACK", hdr.seq_num, hdr.ack_num, 0);
+                c->packets_rx++;
                 if (hdr.flags == (FLAG_SYN | FLAG_ACK)) {
                     printf("\n\033[1;32m[Handshake: Step 2 received]\033[0m SYN + ACK from server (Seq=%u, Ack=%u)\n", hdr.seq_num, hdr.ack_num);
-                    rcv_nxt = hdr.seq_num + 1;
-                    snd_una = hdr.ack_num;
+                    c->rcv_nxt = hdr.seq_num + 1;
+                    c->snd_una = hdr.ack_num;
 
                     /* Step 3: Send ACK */
-                    printf("\033[1;32m[Handshake: Step 3 sending]\033[0m Final ACK (Ack=%u)\n", rcv_nxt);
+                    printf("\033[1;32m[Handshake: Step 3 sending]\033[0m Final ACK (Ack=%u)\n", c->rcv_nxt);
                     int ack_len = serialize_custom_packet(tx_buf, sizeof(tx_buf),
                                                          FLAG_ACK,
-                                                         snd_nxt, rcv_nxt,
+                                                         c->snd_nxt, c->rcv_nxt,
                                                          MYPROTO_DEFAULT_WND, NULL, 0);
-                    link_send_frame(tx_buf, ack_len);
+                    link_send(c->link, tx_buf, ack_len);
                     pcap_write_frame(tx_buf, ack_len, 1);
                     print_packet_details("<<< TX", (myproto_hdr_t *)tx_buf, ack_len);
-                    telemetry_log_packet(1, "ACK", snd_nxt, rcv_nxt, 0);
+                    telemetry_log_packet(1, "ACK", c->snd_nxt, c->rcv_nxt, 0);
+                    c->packets_tx++;
 
-                    state = STATE_ESTABLISHED;
+                    c->state = STATE_ESTABLISHED;
                     telemetry_update_state("ESTABLISHED");
-                    printf("\033[1;32m>>> [CONNECTION ESTABLISHED!]\033[0m Ready to transmit custom data.\n\n");
+                    printf("\033[1;32m>>> [CONNECTION #%d ESTABLISHED!]\033[0m Ready for data transfer.\n\n", c->id);
                     handshake_done = 1;
                     break;
                 }
@@ -259,109 +373,134 @@ static int run_client_mode(const char *server_ip, int server_port) {
     }
 
     if (!handshake_done) {
-        printf("\033[1;31m[ERROR] Connection timed out. Is the server running at %s:%d?\033[0m\n", server_ip, server_port);
-        pcap_close();
-        link_close();
-        return 1;
+        printf("\033[1;31m[ERROR] Connection #%d timed out. Is the receiver listening at %s:%d?\033[0m\n",
+               c->id, server_ip, server_port);
+        link_destroy(c->link);
+        memset(c, 0, sizeof(custom_conn_t));
+        return NULL;
     }
 
-    /* Data Transfer Phase */
-    printf("\n\033[1;33m---------------------------------------------------------------\033[0m\n");
-    printf("\033[1;33m  APPLICATION DATA TRANSMISSION MENU\033[0m\n");
-    printf("  Enter custom text to send (e.g., '\033[1;32mHello\033[0m'):\n");
-    printf("  [Press ENTER to send default 3-packet verification stream]: ");
-    fflush(stdout);
+    return c;
+}
 
-    char custom_msg[512] = {0};
-    if (fgets(custom_msg, sizeof(custom_msg), stdin)) {
-        custom_msg[strcspn(custom_msg, "\r\n")] = '\0';
+static int conn_send_message(custom_conn_t *conn, const char *msg) {
+    if (!conn || !conn->in_use || conn->state != STATE_ESTABLISHED) {
+        printf("\033[1;31m[ERROR] Connection is not active or established.\033[0m\n");
+        return -1;
     }
 
-    const char *messages[3];
-    int msg_count = 0;
+    uint8_t tx_buf[MAX_FRAME_SIZE];
+    uint8_t rx_buf[MAX_FRAME_SIZE];
+    uint16_t msg_len = (uint16_t)strlen(msg);
 
-    if (strlen(custom_msg) > 0) {
-        messages[0] = custom_msg;
-        msg_count = 1;
-        printf("\n\033[1;32m>>> Sending custom message: \"%s\"\033[0m\n", custom_msg);
-    } else {
-        messages[0] = "Custom Packet 1: Hello from Laptop A over Custom L4 Protocol!";
-        messages[1] = "Custom Packet 2: Bypassing OS Kernel TCP stack completely.";
-        messages[2] = "Custom Packet 3: Real-time reliable byte stream verification.";
-        msg_count = 3;
-        printf("\n\033[1;34m>>> Sending automated 3-packet verification stream...\033[0m\n");
-    }
-
-    for (int i = 0; i < msg_count; i++) {
-        const char *msg = messages[i];
-        uint16_t msg_len = (uint16_t)strlen(msg);
-
-        printf("---------------------------------------------------------------\n");
-        printf("\033[1;36m[TRANSMITTING DATA %d/%d]\033[0m Seq=%u Payload=\"%s\"\n", i + 1, msg_count, snd_nxt, msg);
-        tx_len = serialize_custom_packet(tx_buf, sizeof(tx_buf),
+    printf("\n---------------------------------------------------------------\n");
+    printf("\033[1;36m[TRANSMITTING ON CONNECTION #%d]\033[0m Seq=%u Payload=\"%s\"\n", conn->id, conn->snd_nxt, msg);
+    int tx_len = serialize_custom_packet(tx_buf, sizeof(tx_buf),
                                         FLAG_DATA | FLAG_ACK,
-                                        snd_nxt, rcv_nxt,
+                                        conn->snd_nxt, conn->rcv_nxt,
                                         MYPROTO_DEFAULT_WND, msg, msg_len);
-        link_send_frame(tx_buf, tx_len);
-        pcap_write_frame(tx_buf, tx_len, 1);
-        print_packet_details("<<< TX", (myproto_hdr_t *)tx_buf, tx_len);
-        print_hex_dump((const uint8_t *)msg, msg_len);
-        telemetry_log_packet(1, "DATA+ACK", snd_nxt, rcv_nxt, msg_len);
-
-        /* Wait for custom ACK */
-        int ack_received = 0;
-        int wait_ticks = 0;
-        while (!ack_received && wait_ticks < 200) {
-            int bytes = link_recv_frame(rx_buf, sizeof(rx_buf));
-            if (bytes > 0) {
-                pcap_write_frame(rx_buf, bytes, 0);
-                myproto_hdr_t hdr;
-                if (parse_custom_packet(rx_buf, bytes, &hdr, NULL) == 0) {
-                    if (hdr.flags & FLAG_ACK) {
-                        print_packet_details(">>> RX", &hdr, bytes);
-                        printf("\033[1;32m[SUCCESS] Remote peer acknowledged %u bytes! (Ack=%u)\033[0m\n\n", msg_len, hdr.ack_num);
-                        snd_una = hdr.ack_num;
-                        snd_nxt += msg_len;
-                        ack_received = 1;
-                        telemetry_log_packet(0, "ACK", hdr.seq_num, hdr.ack_num, 0);
-                        break;
-                    }
-                }
-            }
-            SLEEP_MS(10);
-            wait_ticks++;
-        }
-
-        SLEEP_MS(300);
-    }
-
-    /* Teardown Connection: Send FIN */
-    printf("---------------------------------------------------------------\n");
-    printf("\033[1;33m[Connection Teardown]\033[0m Sending FIN (Seq=%u)\n", snd_nxt);
-    tx_len = serialize_custom_packet(tx_buf, sizeof(tx_buf),
-                                    FLAG_FIN | FLAG_ACK,
-                                    snd_nxt, rcv_nxt,
-                                    MYPROTO_DEFAULT_WND, NULL, 0);
-    link_send_frame(tx_buf, tx_len);
+    link_send(conn->link, tx_buf, tx_len);
     pcap_write_frame(tx_buf, tx_len, 1);
-    state = STATE_FIN_WAIT;
-    telemetry_update_state("FIN_WAIT");
-    printf("[STATE -> \033[1;33m%s\033[0m]\n", state_to_str(state));
-    telemetry_log_packet(1, "FIN+ACK", snd_nxt, rcv_nxt, 0);
+    print_packet_details("<<< TX", (myproto_hdr_t *)tx_buf, tx_len);
+    print_hex_dump((const uint8_t *)msg, msg_len);
+    telemetry_log_packet(1, "DATA+ACK", conn->snd_nxt, conn->rcv_nxt, msg_len);
+    conn->packets_tx++;
+    conn->bytes_sent += msg_len;
 
-    /* Wait for final ACK */
-    int teardown_ticks = 0;
-    while (teardown_ticks < 100) {
-        int bytes = link_recv_frame(rx_buf, sizeof(rx_buf));
+    /* Wait for ACK */
+    int ack_received = 0;
+    int wait_ticks = 0;
+    while (!ack_received && wait_ticks < 200) {
+        int bytes = link_recv(conn->link, rx_buf, sizeof(rx_buf));
         if (bytes > 0) {
             pcap_write_frame(rx_buf, bytes, 0);
             myproto_hdr_t hdr;
             if (parse_custom_packet(rx_buf, bytes, &hdr, NULL) == 0) {
                 if (hdr.flags & FLAG_ACK) {
                     print_packet_details(">>> RX", &hdr, bytes);
-                    printf("\033[1;32m[SUCCESS] Server acknowledged FIN. Connection cleanly closed.\033[0m\n");
-                    state = STATE_CLOSED;
-                    telemetry_update_state("CLOSED");
+                    conn->packets_rx++;
+                    conn->snd_una = hdr.ack_num;
+                    conn->snd_nxt += msg_len;
+                    ack_received = 1;
+                    telemetry_log_packet(0, "ACK", hdr.seq_num, hdr.ack_num, 0);
+                    printf("\033[1;32m[SUCCESS] Remote peer acknowledged %u bytes! (Next Seq=%u, Ack=%u)\033[0m\n",
+                           msg_len, conn->snd_nxt, hdr.ack_num);
+                    printf("\033[1;36m[KEEP-ALIVE] Connection #%d remains ESTABLISHED and ALIVE. (Not terminated!)\033[0m\n\n",
+                           conn->id);
+                    break;
+                }
+            }
+        }
+        SLEEP_MS(10);
+        wait_ticks++;
+    }
+
+    if (!ack_received) {
+        printf("\033[1;33m[WARNING] No ACK received within timeout. Peer might be busy or packet lost.\033[0m\n");
+    }
+
+    return 0;
+}
+
+static int conn_send_3packet_stream(custom_conn_t *conn) {
+    if (!conn || !conn->in_use || conn->state != STATE_ESTABLISHED) {
+        printf("\033[1;31m[ERROR] Connection is not active or established.\033[0m\n");
+        return -1;
+    }
+
+    const char *messages[3] = {
+        "Custom Packet 1: Hello over Custom User-Space TCP Protocol!",
+        "Custom Packet 2: Bypassing OS Kernel TCP stack completely.",
+        "Custom Packet 3: Real-time reliable multi-connection verification."
+    };
+
+    printf("\n\033[1;34m>>> Sending automated 3-packet verification stream on Connection #%d...\033[0m\n", conn->id);
+
+    for (int i = 0; i < 3; i++) {
+        printf("---------------------------------------------------------------\n");
+        printf("\033[1;36m[VERIFICATION STREAM %d/3 ON CONN #%d]\033[0m\n", i + 1, conn->id);
+        conn_send_message(conn, messages[i]);
+        SLEEP_MS(200);
+    }
+    printf("\033[1;32m[SUCCESS] All 3 verification stream packets sent & acknowledged!\033[0m\n");
+    printf("\033[1;36m[KEEP-ALIVE] Connection #%d remains ESTABLISHED and ALIVE.\033[0m\n", conn->id);
+    return 0;
+}
+
+static int conn_close_connection(custom_conn_t *conn) {
+    if (!conn || !conn->in_use) return -1;
+
+    printf("\n\033[1;33m---------------------------------------------------------------\033[0m\n");
+    printf("\033[1;33m[Connection Teardown]\033[0m Closing Connection #%d to %s:%d...\n",
+           conn->id, conn->peer_ip, conn->peer_port);
+
+    uint8_t tx_buf[MAX_FRAME_SIZE];
+    uint8_t rx_buf[MAX_FRAME_SIZE];
+
+    /* Send FIN */
+    int tx_len = serialize_custom_packet(tx_buf, sizeof(tx_buf),
+                                        FLAG_FIN | FLAG_ACK,
+                                        conn->snd_nxt, conn->rcv_nxt,
+                                        MYPROTO_DEFAULT_WND, NULL, 0);
+    link_send(conn->link, tx_buf, tx_len);
+    pcap_write_frame(tx_buf, tx_len, 1);
+    conn->state = STATE_FIN_WAIT;
+    telemetry_update_state("FIN_WAIT");
+    printf("[STATE -> \033[1;33m%s\033[0m] FIN sent (Seq=%u). Waiting for peer ACK...\n",
+           state_to_str(conn->state), conn->snd_nxt);
+    telemetry_log_packet(1, "FIN+ACK", conn->snd_nxt, conn->rcv_nxt, 0);
+
+    /* Wait for final ACK */
+    int teardown_ticks = 0;
+    while (teardown_ticks < 100) {
+        int bytes = link_recv(conn->link, rx_buf, sizeof(rx_buf));
+        if (bytes > 0) {
+            pcap_write_frame(rx_buf, bytes, 0);
+            myproto_hdr_t hdr;
+            if (parse_custom_packet(rx_buf, bytes, &hdr, NULL) == 0) {
+                if (hdr.flags & FLAG_ACK) {
+                    print_packet_details(">>> RX", &hdr, bytes);
+                    printf("\033[1;32m[SUCCESS] Server acknowledged FIN. Connection #%d cleanly closed.\033[0m\n", conn->id);
                     telemetry_log_packet(0, "ACK", hdr.seq_num, hdr.ack_num, 0);
                     break;
                 }
@@ -371,13 +510,135 @@ static int run_client_mode(const char *server_ip, int server_port) {
         teardown_ticks++;
     }
 
-    printf("\n\033[1;32m>>> Test finished successfully! Check 'captures/client_traffic.pcap' in Wireshark.\033[0m\n");
-    pcap_close();
-    link_close();
+    conn->state = STATE_CLOSED;
+    telemetry_update_state("CLOSED");
+    link_destroy(conn->link);
+    conn->link = NULL;
+    conn->in_use = 0;
+
+    int active_rem = count_active_connections();
+    if (active_rem == 0 && g_client_pcap_open) {
+        pcap_close();
+        g_client_pcap_open = 0;
+    }
+    printf("\033[1;32m[CLOSED] Connection #%d is now terminated. Remaining active connections: %d\033[0m\n",
+           conn->id, active_rem);
     return 0;
 }
 
-/* Self-Test Mode: Runs in-memory loopback test with loss injection & Reno retransmission */
+static void run_connection_session(custom_conn_t *conn) {
+    if (!conn || !conn->in_use) return;
+
+    while (conn && conn->in_use && conn->state == STATE_ESTABLISHED) {
+        int total_active = count_active_connections();
+        printf("\n");
+        printf("\033[1;36m======================================================================\033[0m\n");
+        printf("\033[1;32m  SESSION: ACTIVE CONNECTION #%d \033[1;34m[ESTABLISHED - ALIVE]\033[0m\n", conn->id);
+        printf("  Local Port: \033[1;33m%d\033[0m <---> Remote Peer: \033[1;33m%s:%d\033[0m\n",
+               conn->local_port, conn->peer_ip, conn->peer_port);
+        printf("  Seq: %u | Ack: %u | Sent: %u pkts (%u bytes) | Recv: %u pkts | Active Conns: %d\n",
+               conn->snd_nxt, conn->rcv_nxt, conn->packets_tx, conn->bytes_sent, conn->packets_rx, total_active);
+        printf("\033[1;36m======================================================================\033[0m\n");
+        printf("  [1] \033[1;32mSend Custom Text Message\033[0m (Connection stays alive)\n");
+        printf("  [2] \033[1;34mSend Verification 3-Packet Stream\033[0m (Connection stays alive)\n");
+        printf("  [3] \033[1;33mCreate NEW Connection\033[0m (Keep Connection #%d ALIVE without closing)\n", conn->id);
+        printf("  [4] \033[1;31mClose THIS Connection\033[0m (Manual Graceful FIN Teardown)\n");
+        printf("  [5] \033[1;35mSwitch Active Connection\033[0m (%d active connections)\n", total_active);
+        printf("  [6] \033[1;37mReturn to Main Menu\033[0m (Keep all connections ALIVE in background)\n");
+        printf("\033[1;36m----------------------------------------------------------------------\033[0m\n");
+        printf("  Select an action [1-6]: ");
+        fflush(stdout);
+
+        char input[128];
+        if (!fgets(input, sizeof(input), stdin)) break;
+        int opt = atoi(input);
+
+        if (opt == 1) {
+            printf("\nEnter message to send to %s:%d: ", conn->peer_ip, conn->peer_port);
+            char msg[512] = {0};
+            if (fgets(msg, sizeof(msg), stdin)) {
+                msg[strcspn(msg, "\r\n")] = '\0';
+                if (strlen(msg) == 0) strcpy(msg, "Hello from Custom TCP Protocol Stack!");
+                conn_send_message(conn, msg);
+            }
+        } else if (opt == 2) {
+            conn_send_3packet_stream(conn);
+        } else if (opt == 3) {
+            /* Create new connection WITHOUT closing current connection! */
+            printf("\n\033[1;33m>>> Creating new connection (Connection #%d remains ALIVE)...\033[0m\n", conn->id);
+            printf("Enter Receiver Laptop IP Address [Default: 127.0.0.1]: ");
+            char ip_str[64];
+            fgets(ip_str, sizeof(ip_str), stdin);
+            ip_str[strcspn(ip_str, "\r\n")] = '\0';
+            if (strlen(ip_str) == 0) strcpy(ip_str, "127.0.0.1");
+
+            printf("Enter Receiver Port [Default: 9999]: ");
+            char port_str[32];
+            fgets(port_str, sizeof(port_str), stdin);
+            int port = atoi(port_str);
+            if (port <= 0) port = 9999;
+
+            custom_conn_t *new_c = create_client_connection(ip_str, port);
+            if (new_c) {
+                printf("\n\033[1;32m[SUCCESS] New Connection #%d created! Both Connection #%d and #%d are now ALIVE.\033[0m\n",
+                       new_c->id, conn->id, new_c->id);
+                conn = new_c;
+            }
+        } else if (opt == 4) {
+            /* Close THIS connection */
+            conn_close_connection(conn);
+            int remaining = count_active_connections();
+            if (remaining > 0) {
+                print_active_connections();
+                printf("Select Connection ID to manage (or 0 for Main Menu): ");
+                char id_str[32];
+                fgets(id_str, sizeof(id_str), stdin);
+                int sel_id = atoi(id_str);
+                custom_conn_t *next_c = find_connection_by_id(sel_id);
+                if (next_c) {
+                    conn = next_c;
+                } else {
+                    break;
+                }
+            } else {
+                printf("\nAll active connections closed. Returning to main menu.\n");
+                wait_for_enter();
+                break;
+            }
+        } else if (opt == 5) {
+            print_active_connections();
+            printf("Select Connection ID to switch to: ");
+            char id_str[32];
+            fgets(id_str, sizeof(id_str), stdin);
+            int sel_id = atoi(id_str);
+            custom_conn_t *sw_c = find_connection_by_id(sel_id);
+            if (sw_c) {
+                conn = sw_c;
+            } else {
+                printf("\033[1;31mInvalid Connection ID.\033[0m\n");
+            }
+        } else if (opt == 6) {
+            printf("\n\033[1;32mReturning to Main Menu. All %d connection(s) remain ALIVE.\033[0m\n",
+                   count_active_connections());
+            break;
+        } else {
+            printf("\033[1;31mInvalid option. Enter 1-6.\033[0m\n");
+        }
+    }
+}
+
+static int run_client_mode(const char *server_ip, int server_port) {
+    custom_conn_t *c = create_client_connection(server_ip, server_port);
+    if (!c) {
+        return 1;
+    }
+    run_connection_session(c);
+    return 0;
+}
+
+/* ======================================================================
+ * AUTOMATED PROTOCOL & RENO CONGESTION RECOVERY SELF-TEST
+ * ====================================================================== */
 static int run_self_test(void) {
     printf("\n\033[1;36m===============================================================\033[0m\n");
     printf("\033[1;32m  [CUSTOM PROTOCOL STACK] - Automated Self-Test Verification\033[0m\n");
@@ -508,8 +769,13 @@ static int run_self_test(void) {
     return 0;
 }
 
+/* ======================================================================
+ * MAIN INTERACTIVE CONTROL CENTER MENU
+ * ====================================================================== */
 static void show_interactive_menu(void) {
     while (1) {
+        int active_cnt = count_active_connections();
+
         printf("\n");
         printf("\033[1;36m======================================================================\033[0m\n");
         printf("\033[1;32m       CUSTOM TCP/IP PROTOCOL STACK - CONTROL CENTER & UI            \033[0m\n");
@@ -517,11 +783,17 @@ static void show_interactive_menu(void) {
         printf("\033[1;36m======================================================================\033[0m\n");
         printf("  [1] \033[1;32mRun Automated Protocol & Reno Congestion Recovery Test\033[0m\n");
         printf("  [2] \033[1;34mStart Receiver / Server Mode\033[0m (Wait for connection from other laptop)\n");
-        printf("  [3] \033[1;33mStart Sender / Client Mode\033[0m   (Connect to receiver IP)\n");
-        printf("  [4] \033[1;35mOpen Web Observability Dashboard\033[0m (http://localhost:8080)\n");
-        printf("  [5] Exit\n");
+        printf("  [3] \033[1;33mStart Sender / Client Mode\033[0m   (Create new connection without closing)\n");
+        printf("  [4] \033[1;36mActive Connections & Send Data\033[0m (Manage / Send on open connections)\n");
+        printf("  [5] \033[1;31mClose a Connection\033[0m           (Manual Graceful FIN Teardown)\n");
+        printf("  [6] \033[1;35mOpen Web Observability Dashboard\033[0m (http://localhost:8080)\n");
+        printf("  [7] Exit\n");
         printf("\033[1;36m----------------------------------------------------------------------\033[0m\n");
-        printf("  Select an option [1-5]: ");
+        if (active_cnt > 0) {
+            printf("  \033[1;32mActive Connections: %d ALIVE\033[0m (Ready to transmit or close)\n", active_cnt);
+            printf("\033[1;36m----------------------------------------------------------------------\033[0m\n");
+        }
+        printf("  Select an option [1-7]: ");
         fflush(stdout);
 
         char input[64];
@@ -552,22 +824,75 @@ static void show_interactive_menu(void) {
             int port = atoi(port_str);
             if (port <= 0) port = 9999;
 
-            run_client_mode(ip_str, port);
-            wait_for_enter();
+            custom_conn_t *c = create_client_connection(ip_str, port);
+            if (c) {
+                run_connection_session(c);
+            } else {
+                wait_for_enter();
+            }
         } else if (choice == 4) {
+            /* Manage active connections & send data */
+            if (active_cnt == 0) {
+                printf("\n\033[1;33m[NOTICE] No active connections currently open.\033[0m\n");
+                printf("Select option [3] to establish a connection first.\n");
+                wait_for_enter();
+            } else {
+                print_active_connections();
+                printf("Enter Connection ID to manage / send messages (or 0 to cancel): ");
+                char id_str[32];
+                fgets(id_str, sizeof(id_str), stdin);
+                int sel_id = atoi(id_str);
+                custom_conn_t *c = find_connection_by_id(sel_id);
+                if (c) {
+                    run_connection_session(c);
+                }
+            }
+        } else if (choice == 5) {
+            /* Close a Connection */
+            if (active_cnt == 0) {
+                printf("\n\033[1;33m[NOTICE] No active connections to close.\033[0m\n");
+                wait_for_enter();
+            } else {
+                print_active_connections();
+                printf("Enter Connection ID to close with FIN teardown (or 0 to cancel): ");
+                char id_str[32];
+                fgets(id_str, sizeof(id_str), stdin);
+                int sel_id = atoi(id_str);
+                if (sel_id > 0) {
+                    custom_conn_t *c = find_connection_by_id(sel_id);
+                    if (c) {
+                        conn_close_connection(c);
+                    } else {
+                        printf("\033[1;31mConnection ID #%d not found.\033[0m\n", sel_id);
+                    }
+                    wait_for_enter();
+                }
+            }
+        } else if (choice == 6) {
             printf("\n\033[1;32m[LAUNCHING]\033[0m Opening Web Observability Dashboard at \033[1;34mhttp://localhost:8080\033[0m...\n");
             open_browser("http://localhost:8080");
             printf("Dashboard opened in your default web browser!\n");
-        } else if (choice == 5) {
+        } else if (choice == 7) {
+            /* Close any remaining active connections gracefully before exiting */
+            for (int i = 0; i < MAX_CONNECTIONS; i++) {
+                if (g_conns[i].in_use && g_conns[i].state == STATE_ESTABLISHED) {
+                    conn_close_connection(&g_conns[i]);
+                }
+            }
+            if (g_client_pcap_open) {
+                pcap_close();
+                g_client_pcap_open = 0;
+            }
             printf("\nExiting Custom Protocol Stack. Goodbye!\n");
             break;
         } else {
-            printf("\033[1;31mInvalid selection. Please enter 1, 2, 3, 4, or 5.\033[0m\n");
+            printf("\033[1;31mInvalid selection. Please enter an option from 1 to 7.\033[0m\n");
         }
     }
 }
 
 int main(int argc, char *argv[]) {
+    setvbuf(stdout, NULL, _IONBF, 0);
 #ifdef _WIN32
     /* Enable ANSI terminal colors on Windows Console */
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);

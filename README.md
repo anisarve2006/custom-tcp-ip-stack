@@ -86,6 +86,8 @@ This produces:
 
 ## 5. Running Between 2 Laptops Over Wi-Fi / Hotspot
 
+> 📖 **Full Guide**: For complete end-to-end instructions, troubleshooting, GUI steps, and firewall rules, see [HOW_TO_SETUP.md](file:///e:/Main%20Projects/CN%20Project/HOW_TO_SETUP.md).
+
 You can test wirelessly between two laptops connected to the same Wi-Fi or Mobile Hotspot:
 
 ### Step 1: On Laptop 2 (Receiver / Server)

@@ -22,70 +22,189 @@
   #define CLOSE_SOCKET(s) close(s)
 #endif
 
-static SOCKET g_sock = INVALID_SOCKET;
-static struct sockaddr_in g_peer_addr;
-static int g_has_peer = 0;
-static int g_loss_rate = 0; /* Loss percentage: 0 to 100 */
+typedef struct {
+    SOCKET sock;
+    struct sockaddr_in peer_addr;
+    int has_peer;
+    int is_listener;
+    int local_port;
+} link_endpoint_t;
 
-int link_init(int local_port, const char *peer_ip, int peer_port) {
+static link_handle_t g_default_endpoint = NULL;
+static int g_loss_rate = 0; /* Loss percentage: 0 to 100 */
+static int g_winsock_initialized = 0;
+
+static int ensure_winsock(void) {
 #ifdef _WIN32
-    WSADATA wsa;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        fprintf(stderr, "[Link] Failed to initialize Winsock.\n");
-        return -1;
+    if (!g_winsock_initialized) {
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+            fprintf(stderr, "[Link] Failed to initialize Winsock.\n");
+            return -1;
+        }
+        g_winsock_initialized = 1;
     }
 #endif
+    return 0;
+}
 
-    g_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (g_sock == INVALID_SOCKET) {
+link_handle_t link_create(int local_port, const char *peer_ip, int peer_port) {
+    if (ensure_winsock() != 0) return NULL;
+
+    link_endpoint_t *ep = (link_endpoint_t *)malloc(sizeof(link_endpoint_t));
+    if (!ep) return NULL;
+    memset(ep, 0, sizeof(link_endpoint_t));
+    ep->sock = INVALID_SOCKET;
+
+    ep->sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (ep->sock == INVALID_SOCKET) {
         fprintf(stderr, "[Link] Failed to create UDP socket.\n");
-        return -1;
+        free(ep);
+        return NULL;
     }
 
     /* Configure SO_REUSEADDR */
     int opt = 1;
-    setsockopt(g_sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
+    setsockopt(ep->sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
 
-    /* Bind to local port */
+    /* Bind to local port. If requested port is busy, auto-try next available port */
     struct sockaddr_in local_addr;
     memset(&local_addr, 0, sizeof(local_addr));
     local_addr.sin_family = AF_INET;
     local_addr.sin_addr.s_addr = INADDR_ANY;
-    local_addr.sin_port = htons((uint16_t)local_port);
 
-    if (bind(g_sock, (struct sockaddr *)&local_addr, sizeof(local_addr)) == SOCKET_ERROR) {
-        fprintf(stderr, "[Link] Failed to bind local port %d.\n", local_port);
-        CLOSE_SOCKET(g_sock);
-        g_sock = INVALID_SOCKET;
-        return -1;
+    int bound = 0;
+    int try_port = local_port;
+    int max_attempts = (local_port > 0) ? 50 : 1;
+
+    for (int attempt = 0; attempt < max_attempts; attempt++) {
+        local_addr.sin_port = htons((uint16_t)try_port);
+        if (bind(ep->sock, (struct sockaddr *)&local_addr, sizeof(local_addr)) != SOCKET_ERROR) {
+            bound = 1;
+            break;
+        }
+        if (local_port == 0) break;
+        try_port = (local_port > 1024) ? (local_port - 1 - attempt) : (local_port + 1 + attempt);
+    }
+
+    if (!bound) {
+        fprintf(stderr, "[Link] Failed to bind local port %d (and subsequent alternatives).\n", local_port);
+        CLOSE_SOCKET(ep->sock);
+        free(ep);
+        return NULL;
+    }
+
+    /* Discover actual bound port */
+    socklen_t addr_len = sizeof(local_addr);
+    if (getsockname(ep->sock, (struct sockaddr *)&local_addr, &addr_len) == 0) {
+        ep->local_port = ntohs(local_addr.sin_port);
+    } else {
+        ep->local_port = try_port;
     }
 
     /* Set non-blocking mode */
 #ifdef _WIN32
     u_long non_blocking = 1;
-    ioctlsocket(g_sock, FIONBIO, &non_blocking);
+    ioctlsocket(ep->sock, FIONBIO, &non_blocking);
 #else
-    int flags = fcntl(g_sock, F_GETFL, 0);
-    fcntl(g_sock, F_SETFL, flags | O_NONBLOCK);
+    int flags = fcntl(ep->sock, F_GETFL, 0);
+    fcntl(ep->sock, F_SETFL, flags | O_NONBLOCK);
 #endif
 
     /* Configure peer destination if provided */
     if (peer_ip && peer_port > 0) {
-        memset(&g_peer_addr, 0, sizeof(g_peer_addr));
-        g_peer_addr.sin_family = AF_INET;
-        g_peer_addr.sin_port = htons((uint16_t)peer_port);
-        g_peer_addr.sin_addr.s_addr = inet_addr(peer_ip);
-        if (g_peer_addr.sin_addr.s_addr == INADDR_NONE) {
+        memset(&ep->peer_addr, 0, sizeof(ep->peer_addr));
+        ep->peer_addr.sin_family = AF_INET;
+        ep->peer_addr.sin_port = htons((uint16_t)peer_port);
+        ep->peer_addr.sin_addr.s_addr = inet_addr(peer_ip);
+        if (ep->peer_addr.sin_addr.s_addr == INADDR_NONE) {
             fprintf(stderr, "[Link] Invalid peer IP format: %s\n", peer_ip);
-            return -1;
+            CLOSE_SOCKET(ep->sock);
+            free(ep);
+            return NULL;
         }
-        g_has_peer = 1;
+        ep->has_peer = 1;
+        ep->is_listener = 0;
+    } else {
+        ep->is_listener = 1;
     }
 
-    /* Seed random generator for simulated loss */
-    srand((unsigned int)time(NULL));
+    return (link_handle_t)ep;
+}
 
+int link_send(link_handle_t h, const void *frame_data, size_t len) {
+    if (!h) return -1;
+    link_endpoint_t *ep = (link_endpoint_t *)h;
+    if (ep->sock == INVALID_SOCKET || !ep->has_peer) return -1;
+
+    /* Simulated packet loss injection */
+    if (g_loss_rate > 0) {
+        int r = rand() % 100;
+        if (r < g_loss_rate) {
+            printf("   [SIMULATED LOSS] >>> Packet dropped intentionally (%d%% loss configured)\n", g_loss_rate);
+            return (int)len; /* Return success to simulate drop on wire */
+        }
+    }
+
+    return sendto(ep->sock, (const char *)frame_data, (int)len, 0,
+                  (struct sockaddr *)&ep->peer_addr, sizeof(ep->peer_addr));
+}
+
+int link_recv(link_handle_t h, void *out_buffer, size_t max_len) {
+    if (!h) return -1;
+    link_endpoint_t *ep = (link_endpoint_t *)h;
+    if (ep->sock == INVALID_SOCKET) return -1;
+
+    struct sockaddr_in from_addr;
+    socklen_t from_len = sizeof(from_addr);
+
+    int received = recvfrom(ep->sock, (char *)out_buffer, (int)max_len, 0,
+                            (struct sockaddr *)&from_addr, &from_len);
+
+    if (received > 0) {
+        if (!ep->has_peer || ep->is_listener) {
+            memcpy(&ep->peer_addr, &from_addr, sizeof(from_addr));
+            if (!ep->has_peer) {
+                ep->has_peer = 1;
+                char *ip_str = inet_ntoa(ep->peer_addr.sin_addr);
+                printf("   [Link] Associated with remote peer %s:%d\n", ip_str, ntohs(ep->peer_addr.sin_port));
+            }
+        }
+        return received;
+    }
+
+    return 0; /* Non-blocking: no packet waiting */
+}
+
+int link_get_peer(link_handle_t h, char *out_ip, int *out_port) {
+    if (!h) return -1;
+    link_endpoint_t *ep = (link_endpoint_t *)h;
+    if (!ep->has_peer) return -1;
+
+    if (out_ip) {
+        char *ip_str = inet_ntoa(ep->peer_addr.sin_addr);
+        if (ip_str) strcpy(out_ip, ip_str);
+    }
+    if (out_port) {
+        *out_port = ntohs(ep->peer_addr.sin_port);
+    }
     return 0;
+}
+
+int link_get_local_port(link_handle_t h) {
+    if (!h) return -1;
+    link_endpoint_t *ep = (link_endpoint_t *)h;
+    return ep->local_port;
+}
+
+void link_destroy(link_handle_t h) {
+    if (!h) return;
+    link_endpoint_t *ep = (link_endpoint_t *)h;
+    if (ep->sock != INVALID_SOCKET) {
+        CLOSE_SOCKET(ep->sock);
+        ep->sock = INVALID_SOCKET;
+    }
+    free(ep);
 }
 
 void link_set_loss_rate(int percent) {
@@ -98,57 +217,27 @@ int link_get_loss_rate(void) {
     return g_loss_rate;
 }
 
+/* Legacy single-socket API for backward compatibility */
+int link_init(int local_port, const char *peer_ip, int peer_port) {
+    if (g_default_endpoint) {
+        link_destroy(g_default_endpoint);
+        g_default_endpoint = NULL;
+    }
+    g_default_endpoint = link_create(local_port, peer_ip, peer_port);
+    return g_default_endpoint ? 0 : -1;
+}
+
 int link_send_frame(const void *frame_data, size_t len) {
-    if (g_sock == INVALID_SOCKET || !g_has_peer) {
-        return -1;
-    }
-
-    /* Simulated packet loss injection */
-    if (g_loss_rate > 0) {
-        int r = rand() % 100;
-        if (r < g_loss_rate) {
-            printf("   [SIMULATED LOSS] >>> Packet dropped intentionally (%d%% loss configured)\n", g_loss_rate);
-            return (int)len; /* Return success to sender to simulate drop on the wire */
-        }
-    }
-
-    int sent = sendto(g_sock, (const char *)frame_data, (int)len, 0,
-                      (struct sockaddr *)&g_peer_addr, sizeof(g_peer_addr));
-    return sent;
+    return link_send(g_default_endpoint, frame_data, len);
 }
 
 int link_recv_frame(void *out_buffer, size_t max_len) {
-    if (g_sock == INVALID_SOCKET) {
-        return -1;
-    }
-
-    struct sockaddr_in from_addr;
-    socklen_t from_len = sizeof(from_addr);
-
-    int received = recvfrom(g_sock, (char *)out_buffer, (int)max_len, 0,
-                            (struct sockaddr *)&from_addr, &from_len);
-
-    if (received > 0) {
-        /* If we did not have a fixed peer (e.g., listening server), learn peer's address dynamically! */
-        if (!g_has_peer) {
-            memcpy(&g_peer_addr, &from_addr, sizeof(from_addr));
-            g_has_peer = 1;
-            char *ip_str = inet_ntoa(g_peer_addr.sin_addr);
-            printf("   [Link] Associated with remote peer %s:%d\n", ip_str, ntohs(g_peer_addr.sin_port));
-        }
-        return received;
-    }
-
-    return 0; /* No packet waiting (non-blocking) */
+    return link_recv(g_default_endpoint, out_buffer, max_len);
 }
 
 void link_close(void) {
-    if (g_sock != INVALID_SOCKET) {
-        CLOSE_SOCKET(g_sock);
-        g_sock = INVALID_SOCKET;
+    if (g_default_endpoint) {
+        link_destroy(g_default_endpoint);
+        g_default_endpoint = NULL;
     }
-#ifdef _WIN32
-    WSACleanup();
-#endif
-    g_has_peer = 0;
 }
